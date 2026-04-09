@@ -4,6 +4,7 @@ import androidx.camera.core.CameraSelector;
 
 import com.facebook.react.bridge.ReadableMap;
 
+import com.oney.WebRTCModule.BuildConfig;
 import com.oney.WebRTCModule.ReactBridgeUtil;
 
 /**
@@ -63,6 +64,9 @@ public class DeepARCaptureConfig {
         String licenseKey = ReactBridgeUtil.getMapStrValue(videoConstraints, "deepARLicenseKey");
         if (licenseKey == null && deepARMap != null) {
             licenseKey = ReactBridgeUtil.getMapStrValue(deepARMap, "licenseKey");
+        }
+        if (licenseKey == null || licenseKey.trim().isEmpty()) {
+            licenseKey = BuildConfig.DEEPAR_LICENSE_KEY;
         }
 
         if (licenseKey == null || licenseKey.trim().isEmpty()) {

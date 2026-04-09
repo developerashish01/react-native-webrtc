@@ -57,7 +57,7 @@ const stream = await mediaDevices.getUserMedia({
     frameRate: 30,
     facingMode: 'user',
     deepAR: {
-      licenseKey: 'YOUR_API_KEY',
+      licenseKey: '736b05fc6ade6350a3ff3c8be5c77b737ecc2161404c27322594b982a9f9919e767886d3daa418ff',
       lensFacing: 'front'
     }
   }
