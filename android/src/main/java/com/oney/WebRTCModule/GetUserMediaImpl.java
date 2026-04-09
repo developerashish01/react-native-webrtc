@@ -19,6 +19,8 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.UiThreadUtil;
 import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
+import com.oney.WebRTCModule.deepar.DeepARCaptureConfig;
+import com.oney.WebRTCModule.deepar.DeepARVideoCaptureController;
 import com.oney.WebRTCModule.videoEffects.ProcessorProvider;
 import com.oney.WebRTCModule.videoEffects.VideoEffectProcessor;
 import com.oney.WebRTCModule.videoEffects.VideoFrameProcessor;
@@ -202,10 +204,20 @@ class GetUserMediaImpl {
                 return;
             }
 
-            CameraCaptureController cameraCaptureController = new CameraCaptureController(
-                    currentActivity, getCameraEnumerator(), videoConstraintsMap);
+            AbstractVideoCaptureController videoCaptureController;
+            try {
+                if (DeepARCaptureConfig.isDeepARSource(videoConstraintsMap)) {
+                    videoCaptureController = new DeepARVideoCaptureController(currentActivity, videoConstraintsMap);
+                } else {
+                    videoCaptureController = new CameraCaptureController(
+                            currentActivity, getCameraEnumerator(), videoConstraintsMap);
+                }
+            } catch (IllegalArgumentException e) {
+                errorCallback.invoke("TypeError", e.getMessage());
+                return;
+            }
 
-            videoTrack = createVideoTrack(cameraCaptureController);
+            videoTrack = createVideoTrack(videoCaptureController);
         }
 
         if (audioTrack == null && videoTrack == null) {

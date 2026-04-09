@@ -81,10 +81,13 @@ function normalizeMediaConstraints(constraints, mediaType) {
 
         case 'video': {
             const c = {
+                deepAR: constraints.deepAR,
+                deepARLicenseKey: extractString(constraints, 'deepARLicenseKey'),
                 deviceId: extractString(constraints, 'deviceId'),
                 facingMode: extractString(constraints, 'facingMode'),
                 frameRate: extractNumber(constraints, 'frameRate'),
                 height: extractNumber(constraints, 'height'),
+                source: extractString(constraints, 'source'),
                 width: extractNumber(constraints, 'width')
             };
 
@@ -94,6 +97,11 @@ function normalizeMediaConstraints(constraints, mediaType) {
 
             if (!FACING_MODES.includes(c.facingMode)) {
                 c.facingMode = DEFAULT_VIDEO_CONSTRAINTS.facingMode;
+            }
+
+            if (c.source !== 'deepar') {
+                delete c.deepAR;
+                delete c.deepARLicenseKey;
             }
 
             if (!c.frameRate) {
