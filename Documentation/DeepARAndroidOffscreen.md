@@ -43,6 +43,24 @@ Added to `android/build.gradle`:
 - `androidx.camera:camera-lifecycle:1.3.4`
 - `ai.deepar.ar:deepar:5.6.0` (override with `ext.deepArDependency` if needed)
 
+If Gradle fails with `403 Forbidden` while resolving `ai.deepar.ar:deepar`, configure auth/local overrides in your app `android/build.gradle`:
+
+```gradle
+buildscript {
+  ext {
+    // Optional: private DeepAR Maven credentials.
+    deepArMavenUsername = "<username>"
+    deepArMavenPassword = "<password>"
+
+    // Optional: custom coordinate/version.
+    // deepArDependency = "ai.deepar.ar:deepar:5.6.0"
+
+    // Optional: local AAR fallback (recommended when Maven access is blocked).
+    // deepArAarPath = "${rootDir}/../node_modules/react-native-webrtc/android/libs/deepar-5.6.0.aar"
+  }
+}
+```
+
 ## JS Usage Example
 
 ```ts
