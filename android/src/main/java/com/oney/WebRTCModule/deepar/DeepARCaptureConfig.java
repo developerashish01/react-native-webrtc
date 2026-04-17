@@ -18,13 +18,15 @@ public class DeepARCaptureConfig {
     private final int width;
     private final int height;
     private final int frameRate;
+    private final String effectPath;
 
-    public DeepARCaptureConfig(String licenseKey, int lensFacing, int width, int height, int frameRate) {
+    public DeepARCaptureConfig(String licenseKey, int lensFacing, int width, int height, int frameRate, String effectPath) {
         this.licenseKey = licenseKey;
         this.lensFacing = lensFacing;
         this.width = width;
         this.height = height;
         this.frameRate = frameRate;
+        this.effectPath = effectPath;
     }
 
     public String getLicenseKey() {
@@ -45,6 +47,10 @@ public class DeepARCaptureConfig {
 
     public int getFrameRate() {
         return frameRate;
+    }
+
+    public String getEffectPath() {
+        return effectPath;
     }
 
     public static boolean isDeepARSource(ReadableMap videoConstraints) {
@@ -89,6 +95,11 @@ public class DeepARCaptureConfig {
         int height = videoConstraints.getInt("height");
         int frameRate = videoConstraints.getInt("frameRate");
 
-        return new DeepARCaptureConfig(licenseKey, lensFacing, width, height, frameRate);
+        String effectPath = null;
+        if (deepARMap != null) {
+            effectPath = ReactBridgeUtil.getMapStrValue(deepARMap, "effectPath");
+        }
+
+        return new DeepARCaptureConfig(licenseKey, lensFacing, width, height, frameRate, effectPath);
     }
 }

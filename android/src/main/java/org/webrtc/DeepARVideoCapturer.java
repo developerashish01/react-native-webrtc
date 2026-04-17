@@ -85,6 +85,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             SurfaceTextureHelper surfaceTextureHelper,
             Context applicationContext,
             CapturerObserver capturerObserver) {
+        Log.d(TAG, "initialize() called");
         this.applicationContext = applicationContext;
         this.capturerObserver = capturerObserver;
     }
@@ -108,6 +109,11 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         frameThread.start();
         frameHandler = new Handler(frameThread.getLooper());
         cameraExecutor = Executors.newSingleThreadExecutor();
+
+        Log.d(TAG, "startCapture() w=" + width + " h=" + height + " fps=" + framerate);
+        Log.d(TAG, "License key (first 8): " + (captureConfig.getLicenseKey() != null ? captureConfig.getLicenseKey().substring(0, Math.min(8, captureConfig.getLicenseKey().length())) + "..." : "NULL"));
+        Log.d(TAG, "Effect path: " + captureConfig.getEffectPath());
+        Log.d(TAG, "Lens facing: " + (captureConfig.getLensFacing() == CameraSelector.LENS_FACING_FRONT ? "front" : "back"));
 
         deepAR = new DeepAR(applicationContext);
         deepAR.setLicenseKey(captureConfig.getLicenseKey());
@@ -221,7 +227,10 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
         provider.unbindAll();
         provider.bindToLifecycle((LifecycleOwner) activity, cameraSelector, imageAnalysis);
+        Log.d(TAG, "CameraX bound. lensFacing=" + captureConfig.getLensFacing() + " target=" + targetWidth + "x" + targetHeight);
     }
+
+    private int cameraFrameCount = 0;
 
     private void onCameraImage(@NonNull ImageProxy imageProxy) {
         if (!capturing || deepAR == null || inputBuffers == null) {
@@ -257,6 +266,11 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
         currentInputBuffer = (currentInputBuffer + 1) % NUMBER_OF_INPUT_BUFFERS;
         imageProxy.close();
+
+        cameraFrameCount++;
+        if (cameraFrameCount % 100 == 1) {
+            Log.d(TAG, "onCameraImage #" + cameraFrameCount + " size=" + imageProxy.getWidth() + "x" + imageProxy.getHeight() + " rotation=" + inputRotation);
+        }
     }
 
     private synchronized void rebindCamera() {
@@ -283,7 +297,14 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     @Override
     public void initialized() {
-        Log.d(TAG, "DeepAR initialized.");
+        Log.d(TAG, "DeepAR initialized callback received.");
+        String effectPath = captureConfig.getEffectPath();
+        if (effectPath != null && !effectPath.isEmpty() && deepAR != null) {
+            Log.d(TAG, "Switching effect to: " + effectPath);
+            deepAR.switchEffect("effect", effectPath);
+        } else {
+            Log.w(TAG, "No effectPath provided — DeepAR will run as passthrough (no AR effect).");
+        }
     }
 
     @Override
@@ -293,11 +314,15 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     @Override
     public void faceVisibilityChanged(boolean visible) {
+        Log.d(TAG, "faceVisibilityChanged: " + visible);
     }
 
     @Override
     public void imageVisibilityChanged(String imageName, boolean visible) {
+        Log.d(TAG, "imageVisibilityChanged: " + imageName + " visible=" + visible);
     }
+
+    private int deepARFrameCount = 0;
 
     @Override
     public void frameAvailable(Image image) {
@@ -312,6 +337,11 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             try {
                 if (!capturing || capturerObserver == null) {
                     return;
+                }
+
+                deepARFrameCount++;
+                if (deepARFrameCount % 100 == 1) {
+                    Log.d(TAG, "frameAvailable #" + deepARFrameCount + " from DeepAR: " + image.getWidth() + "x" + image.getHeight() + " format=" + image.getFormat());
                 }
 
                 VideoFrame.I420Buffer buffer = DeepARFrameConverter.toI420(image);
@@ -351,6 +381,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     @Override
     public void effectSwitched(String effect) {
+        Log.d(TAG, "effectSwitched: " + effect);
     }
 
     @Override

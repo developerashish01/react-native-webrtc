@@ -11,6 +11,7 @@ export type MediaTrackConstraints = {
     deepAR?: {
         licenseKey?: string;
         lensFacing?: 'front' | 'back' | 'user' | 'environment';
+        effectPath?: string;
     };
 }
 
