@@ -21,7 +21,7 @@ CameraX -> DeepAR (offscreen) -> WebRTC `VideoTrack`
   - `setLicenseKey(...)`
   - `initialize(...)`
 - Enables offscreen rendering:
-  - `setOffscreenRendering(width, height, DeepARPixelFormat.RGBA)`
+  - `setOffscreenRendering(width, height)`
 - Uses CameraX `ImageAnalysis` and forwards frames via `deepAR.receiveFrame(...)`.
 - Implements `AREventListener` and forwards processed frames from `frameAvailable(Image)` to WebRTC using `capturerObserver.onFrameCaptured(...)`.
 

@@ -28,10 +28,8 @@ import java.util.concurrent.Executors;
 
 import ai.deepar.ar.ARErrorType;
 import ai.deepar.ar.AREventListener;
-import ai.deepar.ar.ARTouchInfo;
 import ai.deepar.ar.DeepAR;
 import ai.deepar.ar.DeepARImageFormat;
-import ai.deepar.ar.DeepARPixelFormat;
 
 /**
  * Captures camera frames with CameraX, runs them through DeepAR offscreen renderer, and forwards
@@ -114,7 +112,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         deepAR = new DeepAR(applicationContext);
         deepAR.setLicenseKey(captureConfig.getLicenseKey());
         deepAR.initialize(applicationContext, this);
-        deepAR.setOffscreenRendering(targetWidth, targetHeight, DeepARPixelFormat.RGBA);
+        deepAR.setOffscreenRendering(targetWidth, targetHeight);
 
         inputBuffers = new ByteBuffer[NUMBER_OF_INPUT_BUFFERS];
         for (int i = 0; i < NUMBER_OF_INPUT_BUFFERS; i++) {
@@ -161,7 +159,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         this.targetFps = framerate;
 
         if (deepAR != null) {
-            deepAR.setOffscreenRendering(targetWidth, targetHeight, DeepARPixelFormat.RGBA);
+            deepAR.setOffscreenRendering(targetWidth, targetHeight);
         }
 
         if (capturing) {
@@ -361,53 +359,5 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         if (capturerEventsListener != null) {
             capturerEventsListener.onCapturerEnded();
         }
-    }
-
-    @Override
-    public void startedVideoRecording() {
-    }
-
-    @Override
-    public void finishedVideoRecording() {
-    }
-
-    @Override
-    public void audioRecordingPrepared() {
-    }
-
-    @Override
-    public void audioRecordingStarted() {
-    }
-
-    @Override
-    public void audioRecordingFinished() {
-    }
-
-    @Override
-    public void audioRecordingFailed() {
-    }
-
-    @Override
-    public void cameraPermissionAsked() {
-    }
-
-    @Override
-    public void cameraPermissionGranted() {
-    }
-
-    @Override
-    public void cameraPermissionDenied() {
-    }
-
-    @Override
-    public void resetStatus() {
-    }
-
-    @Override
-    public void openGLContextPrepared() {
-    }
-
-    @Override
-    public void touchOccurred(ARTouchInfo touchInfo) {
     }
 }
