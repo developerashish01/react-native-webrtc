@@ -16,9 +16,13 @@ public class DeepARVideoCaptureController extends AbstractVideoCaptureController
     private final DeepARCaptureConfig config;
 
     public DeepARVideoCaptureController(Activity activity, ReadableMap constraints) {
-        super(constraints.getInt("width"), constraints.getInt("height"), constraints.getInt("frameRate"));
+        this(activity, DeepARCaptureConfig.fromConstraints(constraints));
+    }
+
+    private DeepARVideoCaptureController(Activity activity, DeepARCaptureConfig config) {
+        super(config.getWidth(), config.getHeight(), config.getFrameRate());
         this.activity = activity;
-        this.config = DeepARCaptureConfig.fromConstraints(constraints);
+        this.config = config;
     }
 
     @Nullable

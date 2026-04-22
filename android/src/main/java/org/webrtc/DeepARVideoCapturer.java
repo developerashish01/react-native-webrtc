@@ -5,12 +5,13 @@ import android.content.Context;
 import android.media.Image;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
-import android.util.Size;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.camera.core.AspectRatio;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
@@ -23,8 +24,12 @@ import com.oney.WebRTCModule.deepar.DeepARCaptureConfig;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import ai.deepar.ar.ARErrorType;
 import ai.deepar.ar.AREventListener;
@@ -37,7 +42,11 @@ import ai.deepar.ar.DeepARImageFormat;
  */
 public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private static final String TAG = DeepARVideoCapturer.class.getSimpleName();
+    private static final String ASHISH = "ASHISH";
+    private static final String ZOOM_DEBUG_TAG = "DeepARZoom";
     private static final int NUMBER_OF_INPUT_BUFFERS = 2;
+    private static final long FRAME_THREAD_SYNC_TIMEOUT_MS = 5000;
+    private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
     public interface CapturerEventsListener {
         void onCapturerEnded();
@@ -58,25 +67,87 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private ExecutorService cameraExecutor;
     private HandlerThread frameThread;
     private Handler frameHandler;
+    private Executor deepARExecutor;
 
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
     private ProcessCameraProvider cameraProvider;
     private ByteBuffer[] inputBuffers;
     private int currentInputBuffer;
     private volatile int inputRotation;
+    private volatile long minFrameIntervalNs;
+    private volatile long lastFrameSubmittedNs;
+    private volatile int lastCameraInputWidth;
+    private volatile int lastCameraInputHeight;
+    private volatile int lastCameraInputRotation;
 
     @Nullable
     private CapturerEventsListener capturerEventsListener;
 
     public DeepARVideoCapturer(Activity activity, DeepARCaptureConfig captureConfig) {
+        Log.d(ASHISH, "DeepARVideoCapturer constructor called");
         this.activity = activity;
         this.captureConfig = captureConfig;
         this.targetWidth = captureConfig.getWidth();
         this.targetHeight = captureConfig.getHeight();
         this.targetFps = captureConfig.getFrameRate();
+        updateFrameRateThrottle(this.targetFps);
+        Log.d(ASHISH, "DeepARVideoCapturer initialized with width=" + targetWidth + ", height=" + targetHeight + ", fps=" + targetFps);
+    }
+
+    private void updateFrameRateThrottle(int fps) {
+        int effectiveFps = Math.max(1, fps);
+        this.minFrameIntervalNs = NANOS_PER_SECOND / effectiveFps;
+        this.lastFrameSubmittedNs = 0L;
+    }
+
+    private static double safeAspect(int width, int height) {
+        if (width <= 0 || height <= 0) {
+            return 0.0;
+        }
+        return (double) width / (double) height;
+    }
+
+    private static void logZoomEstimate(
+            String stage,
+            int inputWidth,
+            int inputHeight,
+            int renderWidth,
+            int renderHeight,
+            int rotation,
+            int rowStride,
+            int outputRowStride,
+            boolean mirror,
+            int frameNumber) {
+        if (inputWidth <= 0 || inputHeight <= 0 || renderWidth <= 0 || renderHeight <= 0) {
+            return;
+        }
+
+        double sx = (double) renderWidth / (double) inputWidth;
+        double sy = (double) renderHeight / (double) inputHeight;
+        double scale = Math.max(sx, sy);
+        double usedInputWidth = renderWidth / scale;
+        double usedInputHeight = renderHeight / scale;
+        double cropWidthPercent = Math.max(0.0, (1.0 - (usedInputWidth / inputWidth)) * 100.0);
+        double cropHeightPercent = Math.max(0.0, (1.0 - (usedInputHeight / inputHeight)) * 100.0);
+
+        Log.d(
+                ZOOM_DEBUG_TAG,
+                stage
+                        + " frame#=" + frameNumber
+                        + " in=" + inputWidth + "x" + inputHeight
+                        + " render=" + renderWidth + "x" + renderHeight
+                        + " inAspect=" + safeAspect(inputWidth, inputHeight)
+                        + " renderAspect=" + safeAspect(renderWidth, renderHeight)
+                        + " estCropW%=" + cropWidthPercent
+                        + " estCropH%=" + cropHeightPercent
+                        + " rotation=" + rotation
+                        + " mirror=" + mirror
+                        + " inRowStride=" + rowStride
+                        + " deepARRowStride=" + outputRowStride);
     }
 
     public void setCapturerEventsListener(@Nullable CapturerEventsListener capturerEventsListener) {
+        Log.d(ASHISH, "setCapturerEventsListener called");
         this.capturerEventsListener = capturerEventsListener;
     }
 
@@ -86,39 +157,111 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             Context applicationContext,
             CapturerObserver capturerObserver) {
         Log.d(TAG, "initialize() called");
+        Log.d(ASHISH, "initialize() called");
         this.applicationContext = applicationContext;
         this.capturerObserver = capturerObserver;
     }
 
     @Override
     public synchronized void startCapture(int width, int height, int framerate) {
+
+        Log.d(ASHISH, "startCapture called with width=" + width + ", height=" + height + ", framerate=" + framerate);
         if (capturing) {
+            Log.d(ASHISH, "Already capturing, returning");
             return;
         }
 
         if (applicationContext == null || capturerObserver == null) {
+            Log.e(ASHISH, "Application context or capturerObserver is null in startCapture");
             throw new IllegalStateException("DeepARVideoCapturer must be initialized before startCapture.");
         }
 
+        // Prevent crash: check if activity is finishing or not running
+        if (activity == null) {
+            Log.e(ASHISH, "DeepARVideoCapturer: Activity is null, cannot initialize DeepAR");
+            return;
+        }
+        if (activity.isFinishing()) {
+            Log.e(ASHISH, "DeepARVideoCapturer: Activity is finishing, cannot initialize DeepAR");
+            return;
+        }
+        // Optionally, check for isDestroyed (API 17+)
+        try {
+            java.lang.reflect.Method isDestroyed = Activity.class.getMethod("isDestroyed");
+            boolean destroyed = (boolean) isDestroyed.invoke(activity);
+            if (destroyed) {
+                Log.e(ASHISH, "DeepARVideoCapturer: Activity is destroyed, cannot initialize DeepAR");
+                return;
+            }
+        } catch (Exception ignore) {}
+
         this.targetWidth = width;
         this.targetHeight = height;
-        this.targetFps = framerate;
+        this.targetFps = Math.max(1, framerate);
+        updateFrameRateThrottle(this.targetFps);
         this.capturing = true;
+        this.lastCameraInputWidth = 0;
+        this.lastCameraInputHeight = 0;
+        this.lastCameraInputRotation = 0;
 
         frameThread = new HandlerThread("DeepARFrameThread");
         frameThread.start();
         frameHandler = new Handler(frameThread.getLooper());
+        deepARExecutor = command -> {
+            Handler handler = frameHandler;
+            if (handler != null) {
+                handler.post(command);
+            }
+        };
         cameraExecutor = Executors.newSingleThreadExecutor();
 
         Log.d(TAG, "startCapture() w=" + width + " h=" + height + " fps=" + framerate);
+        Log.d(
+            ZOOM_DEBUG_TAG,
+            "startCapture target=" + width + "x" + height + " fps=" + framerate + " targetAspect=" + safeAspect(width, height));
         Log.d(TAG, "License key (first 8): " + (captureConfig.getLicenseKey() != null ? captureConfig.getLicenseKey().substring(0, Math.min(8, captureConfig.getLicenseKey().length())) + "..." : "NULL"));
         Log.d(TAG, "Effect path: " + captureConfig.getEffectPath());
         Log.d(TAG, "Lens facing: " + (captureConfig.getLensFacing() == CameraSelector.LENS_FACING_FRONT ? "front" : "back"));
 
-        deepAR = new DeepAR(applicationContext);
-        deepAR.setLicenseKey(captureConfig.getLicenseKey());
-        deepAR.initialize(applicationContext, this);
-        deepAR.setOffscreenRendering(targetWidth, targetHeight);
+        boolean deepARInitOk = runOnFrameThreadBlocking("initialize DeepAR", () -> {
+            Log.d(TAG, "ASHISH: About to create DeepAR instance");
+            Log.d(ASHISH, "About to create DeepAR instance");
+            deepAR = new DeepAR(applicationContext);
+            Log.d(TAG, "ASHISH: DeepAR instance created");
+            Log.d(ASHISH, "DeepAR instance created");
+            Log.d(TAG, "ASHISH: About to set DeepAR license key");
+            Log.d(ASHISH, "About to set DeepAR license key");
+            deepAR.setLicenseKey(captureConfig.getLicenseKey());
+            Log.d(TAG, "ASHISH: DeepAR license key set");
+            Log.d(ASHISH, "DeepAR license key set");
+            Log.d(TAG, "ASHISH: About to initialize DeepAR");
+            Log.d(ASHISH, "About to initialize DeepAR");
+            deepAR.initialize(applicationContext, this);
+            Log.d(TAG, "ASHISH: DeepAR initialized");
+            Log.d(ASHISH, "DeepAR initialized");
+            Log.d(TAG, "ASHISH: About to set offscreen rendering");
+            Log.d(ASHISH, "About to set offscreen rendering");
+            deepAR.setOffscreenRendering(targetWidth, targetHeight);
+            Log.d(TAG, "ASHISH: Offscreen rendering set");
+            Log.d(ASHISH, "Offscreen rendering set");
+        });
+        if (!deepARInitOk) {
+            Log.e(ASHISH, "DeepAR initialization failed on frame thread");
+            capturing = false;
+            if (cameraExecutor != null) {
+                cameraExecutor.shutdownNow();
+                cameraExecutor = null;
+            }
+            if (frameThread != null) {
+                frameThread.quitSafely();
+                frameThread = null;
+                frameHandler = null;
+            }
+            if (capturerObserver != null) {
+                capturerObserver.onCapturerStarted(false);
+            }
+            return;
+        }
 
         inputBuffers = new ByteBuffer[NUMBER_OF_INPUT_BUFFERS];
         for (int i = 0; i < NUMBER_OF_INPUT_BUFFERS; i++) {
@@ -133,7 +276,9 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     @Override
     public synchronized void stopCapture() {
+        Log.d(ASHISH, "stopCapture called");
         if (!capturing) {
+            Log.d(ASHISH, "Not capturing, returning from stopCapture");
             return;
         }
 
@@ -150,6 +295,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             frameThread.quitSafely();
             frameThread = null;
             frameHandler = null;
+            deepARExecutor = null;
         }
 
         inputBuffers = null;
@@ -160,12 +306,21 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     @Override
     public synchronized void changeCaptureFormat(int width, int height, int framerate) {
+        Log.d(ASHISH, "changeCaptureFormat called with width=" + width + ", height=" + height + ", framerate=" + framerate);
         this.targetWidth = width;
         this.targetHeight = height;
-        this.targetFps = framerate;
+        this.targetFps = Math.max(1, framerate);
+        Log.d(
+            ZOOM_DEBUG_TAG,
+            "changeCaptureFormat target=" + width + "x" + height + " fps=" + framerate + " targetAspect=" + safeAspect(width, height));
+        updateFrameRateThrottle(this.targetFps);
 
         if (deepAR != null) {
-            deepAR.setOffscreenRendering(targetWidth, targetHeight);
+            runOnFrameThreadBlocking("set offscreen rendering", () -> {
+                Log.d(ASHISH, "Setting offscreen rendering in changeCaptureFormat");
+                deepAR.setOffscreenRendering(targetWidth, targetHeight);
+                Log.d(ASHISH, "Offscreen rendering set in changeCaptureFormat");
+            });
         }
 
         if (capturing) {
@@ -180,57 +335,147 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     @Override
     public synchronized void dispose() {
+        Log.d(ASHISH, "dispose called");
         stopCapture();
     }
 
     @Override
     public boolean isScreencast() {
+        Log.d(ASHISH, "isScreencast called");
         return false;
     }
 
     private void bindCamera() {
+        Log.d(ASHISH, "bindCamera called");
+        Log.d(ASHISH, "Camera invocation: bindCamera entry");
         if (!(activity instanceof LifecycleOwner)) {
+            Log.e(ASHISH, "Activity is not a LifecycleOwner in bindCamera");
             Log.e(TAG, "Current activity is not a LifecycleOwner; cannot bind CameraX.");
             if (capturerEventsListener != null) {
                 capturerEventsListener.onCapturerEnded();
             }
+            Log.d(ASHISH, "Camera invocation: bindCamera failed - not a LifecycleOwner");
             return;
         }
 
         cameraProviderFuture = ProcessCameraProvider.getInstance(applicationContext);
+        Log.d(ASHISH, "Camera invocation: requested ProcessCameraProvider instance");
         cameraProviderFuture.addListener(() -> {
+            Log.d(ASHISH, "cameraProviderFuture listener triggered");
             try {
                 ProcessCameraProvider provider = cameraProviderFuture.get();
                 cameraProvider = provider;
+                Log.d(ASHISH, "Camera invocation: ProcessCameraProvider acquired");
                 bindImageAnalysis(provider);
+                Log.d(ASHISH, "Camera provider bound and image analysis set");
             } catch (Exception e) {
+                Log.e(ASHISH, "Failed to bind camera provider: " + e.getMessage());
                 Log.e(TAG, "Failed to bind camera provider", e);
                 if (capturerEventsListener != null) {
                     capturerEventsListener.onCapturerEnded();
                 }
+                Log.d(ASHISH, "Camera invocation: Exception in cameraProviderFuture listener");
             }
         }, ContextCompat.getMainExecutor(applicationContext));
     }
 
     private void bindImageAnalysis(@NonNull ProcessCameraProvider provider) {
+        Log.d(ASHISH, "bindImageAnalysis called");
+        Log.d(ASHISH, "Camera invocation: bindImageAnalysis entry");
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setTargetResolution(new Size(targetWidth, targetHeight))
+                // Force a natural camera aspect ratio to avoid center-crop zoom in DeepAR preview.
+                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .build();
 
-        imageAnalysis.setAnalyzer(cameraExecutor, this::onCameraImage);
+        imageAnalysis.setAnalyzer(deepARExecutor != null ? deepARExecutor : cameraExecutor, this::onCameraImage);
+        Log.d(ASHISH, "Camera invocation: setAnalyzer on ImageAnalysis");
 
         CameraSelector cameraSelector = new CameraSelector.Builder()
                 .requireLensFacing(captureConfig.getLensFacing())
                 .build();
 
         provider.unbindAll();
+        Log.d(ASHISH, "Camera invocation: provider.unbindAll called");
         provider.bindToLifecycle((LifecycleOwner) activity, cameraSelector, imageAnalysis);
+        Log.d(ASHISH, "Camera invocation: provider.bindToLifecycle called");
         Log.d(TAG, "CameraX bound. lensFacing=" + captureConfig.getLensFacing() + " target=" + targetWidth + "x" + targetHeight);
+        Log.d(ASHISH, "CameraX bound in bindImageAnalysis");
     }
 
     private int cameraFrameCount = 0;
+
+    private static void packRgba8888(
+            ByteBuffer src,
+            int width,
+            int height,
+            int rowStride,
+            int pixelStride,
+            ByteBuffer dst) {
+        dst.clear();
+        final int dstRowBytes = width * 4;
+        final int srcLimit = src.limit();
+
+        if (pixelStride == 4 && rowStride == dstRowBytes && srcLimit >= (dstRowBytes * height)) {
+            // Fast path: source is already tightly packed RGBA.
+            ByteBuffer dup = src.duplicate();
+            dup.position(0);
+            dup.limit(dstRowBytes * height);
+            dst.put(dup);
+            dst.position(0);
+            return;
+        }
+
+        if (pixelStride == 4) {
+            // Common padded-row case: copy one RGBA row at a time instead of pixel-by-pixel.
+            ByteBuffer dstDup = dst.duplicate();
+            for (int y = 0; y < height; y++) {
+                int srcRowOffset = y * rowStride;
+                int dstRowOffset = y * dstRowBytes;
+                int availableBytes = Math.max(0, srcLimit - srcRowOffset);
+                int copyBytes = Math.min(dstRowBytes, availableBytes);
+
+                dstDup.position(dstRowOffset);
+                if (copyBytes > 0) {
+                    ByteBuffer rowView = src.duplicate();
+                    rowView.position(srcRowOffset);
+                    rowView.limit(srcRowOffset + copyBytes);
+                    dstDup.put(rowView);
+                }
+
+                if (copyBytes < dstRowBytes) {
+                    for (int i = copyBytes; i < dstRowBytes; i++) {
+                        dstDup.put((byte) 0);
+                    }
+                }
+            }
+            dst.position(0);
+            return;
+        }
+
+        // General path: copy each RGBA pixel accounting for CameraX row/pixel stride.
+        for (int y = 0; y < height; y++) {
+            int srcRowOffset = y * rowStride;
+            int dstRowOffset = y * dstRowBytes;
+            for (int x = 0; x < width; x++) {
+                int srcPixelOffset = srcRowOffset + x * pixelStride;
+                int dstPixelOffset = dstRowOffset + x * 4;
+                if (srcPixelOffset + 3 < srcLimit) {
+                    dst.put(dstPixelOffset, src.get(srcPixelOffset));
+                    dst.put(dstPixelOffset + 1, src.get(srcPixelOffset + 1));
+                    dst.put(dstPixelOffset + 2, src.get(srcPixelOffset + 2));
+                    dst.put(dstPixelOffset + 3, src.get(srcPixelOffset + 3));
+                } else {
+                    dst.put(dstPixelOffset, (byte) 0);
+                    dst.put(dstPixelOffset + 1, (byte) 0);
+                    dst.put(dstPixelOffset + 2, (byte) 0);
+                    dst.put(dstPixelOffset + 3, (byte) 0);
+                }
+            }
+        }
+        dst.position(0);
+    }
 
     private void onCameraImage(@NonNull ImageProxy imageProxy) {
         if (!capturing || deepAR == null || inputBuffers == null) {
@@ -238,87 +483,238 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             return;
         }
 
-        ByteBuffer source = imageProxy.getPlanes()[0].getBuffer();
-        source.rewind();
-
-        ByteBuffer deepARInput = inputBuffers[currentInputBuffer];
-        deepARInput.clear();
-
-        if (source.remaining() > deepARInput.remaining()) {
-            Log.w(TAG, "Dropping frame due to oversized camera input buffer.");
+        long frameTimestampNs = SystemClock.elapsedRealtimeNanos();
+        long previousFrameTimestampNs = lastFrameSubmittedNs;
+        if (previousFrameTimestampNs != 0L
+                && frameTimestampNs - previousFrameTimestampNs < minFrameIntervalNs) {
             imageProxy.close();
             return;
         }
+        lastFrameSubmittedNs = frameTimestampNs;
 
-        deepARInput.put(source);
-        deepARInput.position(0);
+        ByteBuffer source = imageProxy.getPlanes()[0].getBuffer();
+        source.rewind();
 
-        inputRotation = imageProxy.getImageInfo().getRotationDegrees();
+        final int width = imageProxy.getWidth();
+        final int height = imageProxy.getHeight();
+        final int pixelStride = imageProxy.getPlanes()[0].getPixelStride();
+        final int rowStride = imageProxy.getPlanes()[0].getRowStride();
 
-        deepAR.receiveFrame(
-                deepARInput,
-                imageProxy.getWidth(),
-                imageProxy.getHeight(),
-                inputRotation,
-                captureConfig.getLensFacing() == CameraSelector.LENS_FACING_FRONT,
-                DeepARImageFormat.RGBA_8888,
-                imageProxy.getPlanes()[0].getPixelStride());
+        ByteBuffer bufferForDeepAR;
+        int outputRowStride;
 
-        currentInputBuffer = (currentInputBuffer + 1) % NUMBER_OF_INPUT_BUFFERS;
-        imageProxy.close();
+        if (pixelStride == 4 && rowStride == width * 4 && source.limit() >= (width * height * 4)) {
+            // Zero-copy for tightly packed RGBA frames.
+            bufferForDeepAR = source;
+            outputRowStride = rowStride;
+        } else {
+            int bufferIndex = currentInputBuffer;
+            ByteBuffer deepARInput = inputBuffers[bufferIndex];
+            int requiredCapacity = width * height * 4;
+            if (deepARInput.capacity() < requiredCapacity) {
+                inputBuffers[bufferIndex] = ByteBuffer.allocateDirect(requiredCapacity);
+                inputBuffers[bufferIndex].order(ByteOrder.nativeOrder());
+                deepARInput = inputBuffers[bufferIndex];
+            }
 
-        cameraFrameCount++;
-        if (cameraFrameCount % 100 == 1) {
-            Log.d(TAG, "onCameraImage #" + cameraFrameCount + " size=" + imageProxy.getWidth() + "x" + imageProxy.getHeight() + " rotation=" + inputRotation);
+            packRgba8888(source, width, height, rowStride, pixelStride, deepARInput);
+            bufferForDeepAR = deepARInput;
+            outputRowStride = width * 4;
+            currentInputBuffer = (currentInputBuffer + 1) % NUMBER_OF_INPUT_BUFFERS;
+        }
+
+        if (cameraFrameCount % 120 == 0) {
+            Log.d(ASHISH, "onCameraImage strides width=" + width + " height=" + height + " rowStride=" + rowStride + " pixelStride=" + pixelStride);
+        }
+
+        final int rotation = imageProxy.getImageInfo().getRotationDegrees();
+        inputRotation = rotation;
+        lastCameraInputWidth = width;
+        lastCameraInputHeight = height;
+        lastCameraInputRotation = rotation;
+        final boolean mirror = captureConfig.getLensFacing() == CameraSelector.LENS_FACING_FRONT;
+
+        try {
+            if (!capturing || deepAR == null) {
+                return;
+            }
+
+            deepAR.receiveFrame(
+                    bufferForDeepAR,
+                    width,
+                    height,
+                    rotation,
+                    mirror,
+                    DeepARImageFormat.RGBA_8888,
+                    outputRowStride);
+
+            cameraFrameCount++;
+            if (cameraFrameCount % 120 == 1) {
+                Log.d(TAG, "onCameraImage #" + cameraFrameCount + " size=" + width + "x" + height + " rotation=" + rotation);
+            }
+            if (cameraFrameCount % 60 == 1) {
+                logZoomEstimate(
+                        "camera->deepar",
+                        width,
+                        height,
+                        targetWidth,
+                        targetHeight,
+                        rotation,
+                        rowStride,
+                        outputRowStride,
+                        mirror,
+                        cameraFrameCount);
+            }
+        } catch (RuntimeException e) {
+            Log.e(ASHISH, "deepAR.receiveFrame failed: " + e.getMessage());
+            Log.e(TAG, "deepAR.receiveFrame failed", e);
+        } finally {
+            imageProxy.close();
         }
     }
 
     private synchronized void rebindCamera() {
+        Log.d(ASHISH, "rebindCamera called");
+        Log.d(ASHISH, "Camera invocation: rebindCamera entry");
         if (cameraProvider == null || !capturing) {
+            Log.d(ASHISH, "cameraProvider null or not capturing in rebindCamera");
+            Log.d(ASHISH, "Camera invocation: rebindCamera early exit");
             return;
         }
         bindImageAnalysis(cameraProvider);
+        Log.d(ASHISH, "Camera invocation: rebindCamera completed");
     }
 
     private synchronized void unbindCamera() {
+        Log.d(ASHISH, "unbindCamera called");
+        Log.d(ASHISH, "Camera invocation: unbindCamera entry");
         if (cameraProvider != null) {
             cameraProvider.unbindAll();
             cameraProvider = null;
+            Log.d(ASHISH, "cameraProvider unbound in unbindCamera");
+            Log.d(ASHISH, "Camera invocation: cameraProvider unbound in unbindCamera");
         }
     }
 
     private synchronized void releaseDeepAR() {
-        if (deepAR != null) {
-            deepAR.setAREventListener(null);
-            deepAR.release();
+        Log.d(ASHISH, "releaseDeepAR called");
+        if (deepAR == null) {
+            return;
+        }
+        if (!runOnFrameThreadBlocking("release DeepAR", () -> {
+            if (deepAR != null) {
+                Log.d(TAG, "ASHISH: About to release DeepAR");
+                deepAR.setAREventListener(null);
+                deepAR.release();
+                deepAR = null;
+                Log.d(TAG, "ASHISH: DeepAR released");
+                Log.d(ASHISH, "DeepAR released in releaseDeepAR");
+            }
+        })) {
+            Log.w(ASHISH, "Falling back to direct DeepAR release due to frame-thread sync failure");
+            try {
+                deepAR.setAREventListener(null);
+                deepAR.release();
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Direct DeepAR release failed", e);
+            }
             deepAR = null;
         }
     }
 
+    private boolean runOnFrameThreadBlocking(String action, Runnable task) {
+        Handler handler = frameHandler;
+        if (handler == null) {
+            Log.e(ASHISH, "runOnFrameThreadBlocking(" + action + ") failed: frameHandler is null");
+            return false;
+        }
+
+        if (Looper.myLooper() == handler.getLooper()) {
+            try {
+                task.run();
+                return true;
+            } catch (RuntimeException e) {
+                Log.e(TAG, "runOnFrameThreadBlocking(" + action + ") failed", e);
+                return false;
+            }
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<RuntimeException> errorRef = new AtomicReference<>();
+
+        boolean posted = handler.post(() -> {
+            try {
+                task.run();
+            } catch (RuntimeException e) {
+                errorRef.set(e);
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        if (!posted) {
+            Log.e(ASHISH, "runOnFrameThreadBlocking(" + action + ") failed: unable to post task");
+            return false;
+        }
+
+        try {
+            boolean completed = latch.await(FRAME_THREAD_SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (!completed) {
+                Log.e(ASHISH, "runOnFrameThreadBlocking(" + action + ") timed out after " + FRAME_THREAD_SYNC_TIMEOUT_MS + "ms");
+                return false;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.e(ASHISH, "runOnFrameThreadBlocking(" + action + ") interrupted", e);
+            return false;
+        }
+
+        RuntimeException error = errorRef.get();
+        if (error != null) {
+            Log.e(TAG, "runOnFrameThreadBlocking(" + action + ") failed", error);
+            return false;
+        }
+
+        return true;
+    }
+
     @Override
     public void initialized() {
+        Log.d(ASHISH, "DeepAR initialized callback received");
         Log.d(TAG, "DeepAR initialized callback received.");
         String effectPath = captureConfig.getEffectPath();
-        if (effectPath != null && !effectPath.isEmpty() && deepAR != null) {
+        if (effectPath != null && !effectPath.isEmpty()) {
+            Log.d(ASHISH, "Switching effect to: " + effectPath);
             Log.d(TAG, "Switching effect to: " + effectPath);
-            deepAR.switchEffect("effect", effectPath);
+            boolean switched = runOnFrameThreadBlocking("switch effect", () -> {
+                if (deepAR != null) {
+                    deepAR.switchEffect("effect", effectPath);
+                }
+            });
+            if (!switched) {
+                Log.e(ASHISH, "Failed to switch DeepAR effect on frame thread: " + effectPath);
+            }
         } else {
+            Log.w(ASHISH, "No effectPath provided — DeepAR will run as passthrough (no AR effect).");
             Log.w(TAG, "No effectPath provided — DeepAR will run as passthrough (no AR effect).");
         }
     }
 
     @Override
     public void shutdownFinished() {
+        Log.d(ASHISH, "DeepAR shutdown finished");
         Log.d(TAG, "DeepAR shutdown finished.");
     }
 
     @Override
     public void faceVisibilityChanged(boolean visible) {
+        Log.d(ASHISH, "faceVisibilityChanged: " + visible);
         Log.d(TAG, "faceVisibilityChanged: " + visible);
     }
 
     @Override
     public void imageVisibilityChanged(String imageName, boolean visible) {
+        Log.d(ASHISH, "imageVisibilityChanged: " + imageName + " visible=" + visible);
         Log.d(TAG, "imageVisibilityChanged: " + imageName + " visible=" + visible);
     }
 
@@ -326,66 +722,94 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     @Override
     public void frameAvailable(Image image) {
-        Handler handler = frameHandler;
-        if (!capturing || handler == null) {
-            image.close();
+        if (image == null) {
+            Log.e(ASHISH, "frameAvailable: image is null");
             return;
         }
-
-        handler.post(() -> {
-            VideoFrame frame = null;
-            try {
-                if (!capturing || capturerObserver == null) {
-                    return;
-                }
-
-                deepARFrameCount++;
-                if (deepARFrameCount % 100 == 1) {
-                    Log.d(TAG, "frameAvailable #" + deepARFrameCount + " from DeepAR: " + image.getWidth() + "x" + image.getHeight() + " format=" + image.getFormat());
-                }
-
-                VideoFrame.I420Buffer buffer = DeepARFrameConverter.toI420(image);
-                long timestampNs = SystemClock.elapsedRealtimeNanos();
-                frame = new VideoFrame(buffer, inputRotation, timestampNs);
-                capturerObserver.onFrameCaptured(frame);
-            } catch (RuntimeException e) {
-                Log.e(TAG, "Failed to convert/send DeepAR frame", e);
-            } finally {
-                if (frame != null) {
-                    frame.release();
-                }
-                image.close();
+        // Defensive: try to access a property to check if image is already closed
+        try {
+            int w = image.getWidth();
+        } catch (IllegalStateException e) {
+            Log.e(ASHISH, "frameAvailable: image is already closed (early guard)");
+            try { image.close(); } catch (Exception ignore) {}
+            return;
+        }
+        if (!capturing || capturerObserver == null) {
+            try { image.close(); } catch (Exception ignore) {}
+            return;
+        }
+        VideoFrame frame = null;
+        try {
+            deepARFrameCount++;
+            if (deepARFrameCount % 100 == 1) {
+                Log.d(TAG, "frameAvailable #" + deepARFrameCount + " from DeepAR: " + image.getWidth() + "x" + image.getHeight() + " format=" + image.getFormat());
+                Log.d(ASHISH, "frameAvailable #" + deepARFrameCount + " from DeepAR: " + image.getWidth() + "x" + image.getHeight() + " format=" + image.getFormat());
             }
-        });
+            if (deepARFrameCount % 60 == 1) {
+                logZoomEstimate(
+                        "deepar->output",
+                        lastCameraInputWidth,
+                        lastCameraInputHeight,
+                        image.getWidth(),
+                        image.getHeight(),
+                        lastCameraInputRotation,
+                        /* rowStride */ -1,
+                        /* outputRowStride */ -1,
+                        captureConfig.getLensFacing() == CameraSelector.LENS_FACING_FRONT,
+                        deepARFrameCount);
+            }
+
+            VideoFrame.I420Buffer buffer = DeepARFrameConverter.toI420(image);
+            long timestampNs = SystemClock.elapsedRealtimeNanos();
+            // DeepAR output already contains the requested orientation. Passing inputRotation here
+            // causes double-rotation in RTCView on some devices.
+            frame = new VideoFrame(buffer, 0, timestampNs);
+            capturerObserver.onFrameCaptured(frame);
+        } catch (RuntimeException e) {
+            Log.e(ASHISH, "Failed to convert/send DeepAR frame: " + e.getMessage());
+            Log.e(TAG, "Failed to convert/send DeepAR frame", e);
+        } finally {
+            if (frame != null) {
+                frame.release();
+            }
+            try { image.close(); } catch (Exception ignore) {}
+        }
     }
 
     @Override
     public void screenshotTaken(android.graphics.Bitmap bitmap) {
+        Log.d(ASHISH, "screenshotTaken called");
     }
 
     @Override
     public void videoRecordingStarted() {
+        Log.d(ASHISH, "videoRecordingStarted called");
     }
 
     @Override
     public void videoRecordingFinished() {
+        Log.d(ASHISH, "videoRecordingFinished called");
     }
 
     @Override
     public void videoRecordingFailed() {
+        Log.d(ASHISH, "videoRecordingFailed called");
     }
 
     @Override
     public void videoRecordingPrepared() {
+        Log.d(ASHISH, "videoRecordingPrepared called");
     }
 
     @Override
     public void effectSwitched(String effect) {
+        Log.d(ASHISH, "effectSwitched: " + effect);
         Log.d(TAG, "effectSwitched: " + effect);
     }
 
     @Override
     public void error(ARErrorType errorType, String errorText) {
+        Log.e(ASHISH, "DeepAR error " + errorType + ": " + errorText);
         Log.e(TAG, "DeepAR error " + errorType + ": " + errorText);
         if (capturerEventsListener != null) {
             capturerEventsListener.onCapturerEnded();

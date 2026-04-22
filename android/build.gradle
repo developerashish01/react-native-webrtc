@@ -47,7 +47,7 @@ android {
         targetSdkVersion safeExtGet('targetSdkVersion', 24)
         versionCode 1
         versionName "1.0"
-        buildConfigField "String", "DEEPAR_LICENSE_KEY", "\"${safeExtGet('deepARLicenseKey', '736b05fc6ade6350a3ff3c8be5c77b737ecc2161404c27322594b982a9f9919e767886d3daa418ff')}\""
+        buildConfigField "String", "DEEPAR_LICENSE_KEY", "\"${safeExtGet('deepARLicenseKey', 'b40d07522b8976d959e1ac9bc137a77f67a422aa77d6078efc67249e6f1db63976c2442c340d591c')}\""
         consumerProguardFiles 'consumer-rules.pro'
     }
 

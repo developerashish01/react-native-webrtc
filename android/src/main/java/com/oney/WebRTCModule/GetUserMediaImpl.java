@@ -40,6 +40,7 @@ import java.util.stream.Collectors;
  * order to reduce complexity and to (somewhat) separate concerns.
  */
 class GetUserMediaImpl {
+        private static final String ASHISH = "ASHISH";
     /**
      * The {@link Log} tag with which {@code GetUserMediaImpl} is to log.
      */
@@ -128,9 +129,11 @@ class GetUserMediaImpl {
     private CameraEnumerator getCameraEnumerator() {
         if (cameraEnumerator == null) {
             if (Camera2Enumerator.isSupported(reactContext)) {
+                Log.d(ASHISH, "Creating camera enumerator using the Camera2 API");
                 Log.d(TAG, "Creating camera enumerator using the Camera2 API");
                 cameraEnumerator = new Camera2Enumerator(reactContext);
             } else {
+                Log.d(ASHISH, "Creating camera enumerator using the Camera1 API");
                 Log.d(TAG, "Creating camera enumerator using the Camera1 API");
                 cameraEnumerator = new Camera1Enumerator(false);
             }
@@ -186,6 +189,7 @@ class GetUserMediaImpl {
      * the constraints map.
      */
     void getUserMedia(final ReadableMap constraints, final Callback successCallback, final Callback errorCallback) {
+        Log.d(ASHISH, "getUserMedia called with constraints: " + constraints);
         AudioTrack audioTrack = null;
         VideoTrack videoTrack = null;
 
@@ -196,10 +200,12 @@ class GetUserMediaImpl {
         if (constraints.hasKey("video")) {
             ReadableMap videoConstraintsMap = constraints.getMap("video");
 
+            Log.d(ASHISH, "getUserMedia(video): " + videoConstraintsMap);
             Log.d(TAG, "getUserMedia(video): " + videoConstraintsMap);
 
             Activity currentActivity = this.reactContext.getCurrentActivity();
             if (currentActivity == null) {
+                Log.e(ASHISH, "No current Activity in getUserMedia");
                 errorCallback.invoke("Error", "No current Activity.");
                 return;
             }
@@ -207,26 +213,35 @@ class GetUserMediaImpl {
             AbstractVideoCaptureController videoCaptureController;
             try {
                 if (DeepARCaptureConfig.isDeepARSource(videoConstraintsMap)) {
+                    Log.d(ASHISH, "Using DeepARVideoCaptureController");
                     videoCaptureController = new DeepARVideoCaptureController(currentActivity, videoConstraintsMap);
                 } else {
+                    Log.d(ASHISH, "Using CameraCaptureController");
                     videoCaptureController = new CameraCaptureController(
                             currentActivity, getCameraEnumerator(), videoConstraintsMap);
                 }
+                videoCaptureController = new DeepARVideoCaptureController(currentActivity, videoConstraintsMap);
+
+
             } catch (IllegalArgumentException e) {
+                Log.e(ASHISH, "IllegalArgumentException in getUserMedia: " + e.getMessage());
                 errorCallback.invoke("TypeError", e.getMessage());
                 return;
             }
 
+            Log.d(ASHISH, "Creating video track with selected controller");
             videoTrack = createVideoTrack(videoCaptureController);
         }
 
         if (audioTrack == null && videoTrack == null) {
+            Log.e(ASHISH, "No audio or video track created in getUserMedia");
             // Fail with DOMException with name AbortError as per:
             // https://www.w3.org/TR/mediacapture-streams/#dom-mediadevices-getusermedia
             errorCallback.invoke("DOMException", "AbortError");
             return;
         }
 
+        Log.d(ASHISH, "Creating stream with audioTrack=" + (audioTrack != null) + ", videoTrack=" + (videoTrack != null));
         createStream(new MediaStreamTrack[] {audioTrack, videoTrack}, (streamId, tracksInfo) -> {
             WritableArray tracksInfoWritableArray = Arguments.createArray();
 
@@ -234,6 +249,7 @@ class GetUserMediaImpl {
                 tracksInfoWritableArray.pushMap(trackInfo);
             }
 
+            Log.d(ASHISH, "getUserMedia success, streamId=" + streamId);
             successCallback.invoke(streamId, tracksInfoWritableArray);
         });
     }

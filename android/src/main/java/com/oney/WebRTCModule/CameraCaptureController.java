@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class CameraCaptureController extends AbstractVideoCaptureController {
+        private static final String ASHISH = "ASHISH";
     /**
      * The {@link Log} tag with which {@code CameraCaptureController} is to log.
      */
@@ -62,6 +63,7 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
         this.context = context;
         this.cameraEnumerator = cameraEnumerator;
         this.constraints = constraints;
+        Log.d(ASHISH, "CameraCaptureController constructed with width=" + targetWidth + ", height=" + targetHeight + ", fps=" + targetFps);
     }
 
     @Nullable
@@ -100,6 +102,7 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
             this.targetWidth = constraints.getInt("width");
             this.targetHeight = constraints.getInt("height");
             this.targetFps = constraints.getInt("frameRate");
+            Log.d(ASHISH, "applyConstraints: width=" + targetWidth + ", height=" + targetHeight + ", fps=" + targetFps);
         };
 
         if (videoCapturer == null) {
@@ -201,11 +204,14 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
         String deviceId = ReactBridgeUtil.getMapStrValue(this.constraints, "deviceId");
         String facingMode = ReactBridgeUtil.getMapStrValue(this.constraints, "facingMode");
 
+        Log.d(ASHISH, "createVideoCapturer called with deviceId=" + deviceId + ", facingMode=" + facingMode);
         CreateCapturerResult result = createVideoCapturer(deviceId, facingMode);
         if (result == null) {
+            Log.e(ASHISH, "createVideoCapturer: No suitable camera found");
             return null;
         }
 
+        Log.d(ASHISH, "createVideoCapturer: Camera selected: " + result.cameraName + " (index=" + result.cameraIndex + ")");
         updateActualSize(result.cameraIndex, result.cameraName, result.videoCapturer);
 
         return result.videoCapturer;
@@ -251,6 +257,7 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
             cameraIndex = Integer.parseInt(deviceId);
             cameraName = deviceNames[cameraIndex];
         } catch (Exception e) {
+            Log.d(ASHISH, "createVideoCapturer: failed to find device with id: " + deviceId);
             Log.d(TAG, "failed to find device with id: " + deviceId);
         }
 
@@ -259,12 +266,14 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
             VideoCapturer videoCapturer = cameraEnumerator.createCapturer(cameraName, cameraEventsHandler);
             String message = "Create user-specified camera " + cameraName;
             if (videoCapturer != null) {
+                Log.d(ASHISH, message + " succeeded");
                 Log.d(TAG, message + " succeeded");
                 this.isFrontFacing = cameraEnumerator.isFrontFacing(cameraName);
                 this.currentDeviceId = String.valueOf(cameraIndex);
                 return new CreateCapturerResult(cameraIndex, cameraName, videoCapturer);
             } else {
                 // fallback to facingMode
+                Log.d(ASHISH, message + " failed");
                 Log.d(TAG, message + " failed");
                 failedDevices.add(cameraName);
             }
@@ -284,11 +293,13 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
             VideoCapturer videoCapturer = cameraEnumerator.createCapturer(name, cameraEventsHandler);
             String message = "Create camera " + name;
             if (videoCapturer != null) {
+                Log.d(ASHISH, message + " succeeded");
                 Log.d(TAG, message + " succeeded");
                 this.isFrontFacing = cameraEnumerator.isFrontFacing(name);
                 this.currentDeviceId = String.valueOf(cameraIndex);
                 return new CreateCapturerResult(cameraIndex, name, videoCapturer);
             } else {
+                Log.d(ASHISH, message + " failed");
                 Log.d(TAG, message + " failed");
                 failedDevices.add(name);
             }
@@ -302,11 +313,13 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
                 VideoCapturer videoCapturer = cameraEnumerator.createCapturer(name, cameraEventsHandler);
                 String message = "Create fallback camera " + name;
                 if (videoCapturer != null) {
+                    Log.d(ASHISH, message + " succeeded");
                     Log.d(TAG, message + " succeeded");
                     this.isFrontFacing = cameraEnumerator.isFrontFacing(name);
                     this.currentDeviceId = String.valueOf(cameraIndex);
                     return new CreateCapturerResult(cameraIndex, name, videoCapturer);
                 } else {
+                    Log.d(ASHISH, message + " failed");
                     Log.d(TAG, message + " failed");
                     failedDevices.add(name);
                 }
@@ -314,6 +327,7 @@ public class CameraCaptureController extends AbstractVideoCaptureController {
         }
 
         currentDeviceId = null;
+        Log.w(ASHISH, "Unable to identify a suitable camera.");
         Log.w(TAG, "Unable to identify a suitable camera.");
 
         return null;

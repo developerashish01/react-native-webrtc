@@ -327,7 +327,7 @@ Don't forget, the user facing camera is usually mirrored.
 ```javascript
 <RTCView
 	mirror={true}
-	objectFit={'cover'}
+	objectFit={'contain'}
 	streamURL={localMediaStream.toURL()}
 	zOrder={0}
 />
@@ -353,7 +353,7 @@ const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 });
 
 <RTCView
 	mirror={true}
-	objectFit={'cover'}
+	objectFit={'contain'}
 	streamURL={localMediaStream.toURL()}
 	zOrder={0}
 	onDimensionsChange={(event) => {
