@@ -44,6 +44,8 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private static final String TAG = DeepARVideoCapturer.class.getSimpleName();
     private static final String ASHISH = "ASHISH";
     private static final String ZOOM_DEBUG_TAG = "DeepARZoom";
+    private static final String ANDROID_ASSET_PREFIX = "file:///android_asset/";
+    private static final String DEFAULT_FALLBACK_EFFECT = "background_blur.deepar";
     private static final int NUMBER_OF_INPUT_BUFFERS = 2;
     private static final long FRAME_THREAD_SYNC_TIMEOUT_MS = 5000;
     private static final long MAIN_THREAD_SYNC_TIMEOUT_MS = 5000;
@@ -789,24 +791,59 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     public void initialized() {
         Log.d(ASHISH, "DeepAR initialized callback received");
         Log.d(TAG, "DeepAR initialized callback received.");
-        String effectPath = captureConfig.getEffectPath();
+        String effectPath = resolveEffectPathWithFallback(captureConfig.getEffectPath());
         if (effectPath != null && !effectPath.isEmpty()) {
             Log.d(ASHISH, "Switching effect to: " + effectPath);
             Log.d(TAG, "Switching effect to: " + effectPath);
-            boolean switched = runOnFrameThreadBlocking("switch effect", () -> {
-                if (deepAR != null) {
-                    Log.d(ASHISH, "applying effects in initialized callback");
-                    deepAR.switchEffect("effect", effectPath);
-                }else{
-                    Log.e(ASHISH, "Cannot switch effect because DeepAR instance is null");
-                }
-            });
+            final String resolvedEffectPath = effectPath;
+            boolean switched = runOnFrameThreadBlocking("switch effect", () -> switchEffectInternal(resolvedEffectPath));
             if (!switched) {
                 Log.e(ASHISH, "Failed to switch DeepAR effect on frame thread: " + effectPath);
+                // Fallback: try on current callback thread if frame-thread switch fails.
+                switchEffectInternal(effectPath);
             }
         } else {
             Log.w(ASHISH, "No effectPath provided — DeepAR will run as passthrough (no AR effect).");
             Log.w(TAG, "No effectPath provided — DeepAR will run as passthrough (no AR effect).");
+        }
+    }
+
+    private void switchEffectInternal(String effectPath) {
+        if (deepAR == null) {
+            Log.e(ASHISH, "Cannot switch effect because DeepAR instance is null");
+            return;
+        }
+        Log.d(ASHISH, "applying effects in initialized callback");
+        deepAR.switchEffect("effect", effectPath);
+    }
+
+    private String resolveEffectPathWithFallback(String requestedEffectPath) {
+        String effectPath = requestedEffectPath;
+        if (!assetPathExists(effectPath)) {
+            Log.e(ASHISH, "Requested DeepAR effect asset is missing: " + effectPath);
+            String fallback = ANDROID_ASSET_PREFIX + DEFAULT_FALLBACK_EFFECT;
+            if (assetPathExists(fallback)) {
+                Log.w(ASHISH, "Falling back to bundled DeepAR effect: " + fallback);
+                effectPath = fallback;
+            } else {
+                Log.e(ASHISH, "Fallback DeepAR effect asset also missing: " + fallback);
+            }
+        }
+
+        return effectPath;
+    }
+
+    private boolean assetPathExists(String path) {
+        if (path == null || !path.startsWith(ANDROID_ASSET_PREFIX) || applicationContext == null) {
+            return true;
+        }
+
+        String assetRelativePath = path.substring(ANDROID_ASSET_PREFIX.length());
+        try {
+            applicationContext.getAssets().open(assetRelativePath).close();
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 

@@ -12,7 +12,7 @@ import com.oney.WebRTCModule.ReactBridgeUtil;
 public class DeepARCaptureConfig {
     public static final String SOURCE_NAME = "deepar";
     private static final String ANDROID_ASSET_PREFIX = "file:///android_asset/";
-    private static final String DEFAULT_EFFECT_FILENAME = "viking_helmet.deepar";
+    private static final String DEFAULT_EFFECT_FILENAME = "background_blur.deepar";
     private static final int MAX_FRAME_PIXELS = 960 * 540;
     private static final int MAX_FPS = 15;
         private static final int[][] STANDARD_4_3_SIZES = new int[][] {
