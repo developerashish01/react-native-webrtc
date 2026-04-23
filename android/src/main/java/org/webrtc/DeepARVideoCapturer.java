@@ -787,7 +787,10 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             Log.d(TAG, "Switching effect to: " + effectPath);
             boolean switched = runOnFrameThreadBlocking("switch effect", () -> {
                 if (deepAR != null) {
+                    Log.d(ASHISH, "applying effects in initialized callback");
                     deepAR.switchEffect("effect", effectPath);
+                }else{
+                    Log.e(ASHISH, "Cannot switch effect because DeepAR instance is null");
                 }
             });
             if (!switched) {
