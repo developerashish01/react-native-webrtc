@@ -20,6 +20,7 @@
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
   "dependencies": {
+    "@babel/runtime": "^7.29.2",
     "base64-js": "1.5.1",
     "debug": "4.3.4"
   },
@@ -36,6 +37,7 @@
     "url": "https://github.com/react-native-webrtc/react-native-webrtc/issues"
   },
   "devDependencies": {
+    "@react-native-community/cli": "latest",
     "@types/debug": "4.1.7",
     "@types/react": "17.0.40",
     "@types/react-native": "0.67.3",
@@ -47,9 +49,7 @@
     "lint-staged": "11.2.3",
     "prettier": "2.4.1",
     "react-native-builder-bob": "0.18.2",
-    "typescript": "4.6.2",
-        "@react-native-community/cli": "latest"
-
+    "typescript": "4.6.2"
   },
   "lint-staged": {
     "**/*": "prettier --write --ignore-unknown"
