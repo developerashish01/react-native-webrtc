@@ -46,6 +46,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private static final String ZOOM_DEBUG_TAG = "DeepARZoom";
     private static final int NUMBER_OF_INPUT_BUFFERS = 2;
     private static final long FRAME_THREAD_SYNC_TIMEOUT_MS = 5000;
+    private static final long MAIN_THREAD_SYNC_TIMEOUT_MS = 5000;
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
     public interface CapturerEventsListener {
@@ -76,6 +77,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private volatile int inputRotation;
     private volatile long minFrameIntervalNs;
     private volatile long lastFrameSubmittedNs;
+    private volatile long captureSessionId;
     private volatile int lastCameraInputWidth;
     private volatile int lastCameraInputHeight;
     private volatile int lastCameraInputRotation;
@@ -199,6 +201,8 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         this.targetHeight = height;
         this.targetFps = Math.max(1, framerate);
         updateFrameRateThrottle(this.targetFps);
+        final long sessionId = captureSessionId + 1;
+        captureSessionId = sessionId;
         this.capturing = true;
         this.lastCameraInputWidth = 0;
         this.lastCameraInputHeight = 0;
@@ -270,7 +274,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         }
         currentInputBuffer = 0;
 
-        bindCamera();
+        bindCamera(sessionId);
         capturerObserver.onCapturerStarted(true);
     }
 
@@ -282,6 +286,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             return;
         }
 
+        captureSessionId++;
         capturing = false;
         unbindCamera();
         releaseDeepAR();
@@ -345,7 +350,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         return false;
     }
 
-    private void bindCamera() {
+    private void bindCamera(long sessionId) {
         Log.d(ASHISH, "bindCamera called");
         Log.d(ASHISH, "Camera invocation: bindCamera entry");
         if (!(activity instanceof LifecycleOwner)) {
@@ -361,12 +366,16 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         cameraProviderFuture = ProcessCameraProvider.getInstance(applicationContext);
         Log.d(ASHISH, "Camera invocation: requested ProcessCameraProvider instance");
         cameraProviderFuture.addListener(() -> {
+            if (!capturing || captureSessionId != sessionId) {
+                Log.d(ASHISH, "Ignoring stale camera provider callback for session=" + sessionId + " activeSession=" + captureSessionId);
+                return;
+            }
             Log.d(ASHISH, "cameraProviderFuture listener triggered");
             try {
                 ProcessCameraProvider provider = cameraProviderFuture.get();
                 cameraProvider = provider;
                 Log.d(ASHISH, "Camera invocation: ProcessCameraProvider acquired");
-                bindImageAnalysis(provider);
+                bindImageAnalysis(provider, sessionId);
                 Log.d(ASHISH, "Camera provider bound and image analysis set");
             } catch (Exception e) {
                 Log.e(ASHISH, "Failed to bind camera provider: " + e.getMessage());
@@ -379,9 +388,23 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         }, ContextCompat.getMainExecutor(applicationContext));
     }
 
-    private void bindImageAnalysis(@NonNull ProcessCameraProvider provider) {
+    private void bindImageAnalysis(@NonNull ProcessCameraProvider provider, long sessionId) {
         Log.d(ASHISH, "bindImageAnalysis called");
         Log.d(ASHISH, "Camera invocation: bindImageAnalysis entry");
+        if (!capturing || captureSessionId != sessionId) {
+            Log.d(ASHISH, "Skipping bindImageAnalysis for stale session=" + sessionId + " activeSession=" + captureSessionId);
+            return;
+        }
+
+        Executor analyzerExecutor = deepARExecutor;
+        if (analyzerExecutor == null) {
+            Log.e(ASHISH, "Cannot bind analyzer because deepARExecutor is null");
+            if (capturerEventsListener != null) {
+                capturerEventsListener.onCapturerEnded();
+            }
+            return;
+        }
+
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -389,19 +412,27 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .build();
 
-        imageAnalysis.setAnalyzer(deepARExecutor != null ? deepARExecutor : cameraExecutor, this::onCameraImage);
+        imageAnalysis.setAnalyzer(analyzerExecutor, image -> onCameraImage(sessionId, image));
         Log.d(ASHISH, "Camera invocation: setAnalyzer on ImageAnalysis");
 
         CameraSelector cameraSelector = new CameraSelector.Builder()
                 .requireLensFacing(captureConfig.getLensFacing())
                 .build();
 
-        provider.unbindAll();
-        Log.d(ASHISH, "Camera invocation: provider.unbindAll called");
-        provider.bindToLifecycle((LifecycleOwner) activity, cameraSelector, imageAnalysis);
-        Log.d(ASHISH, "Camera invocation: provider.bindToLifecycle called");
-        Log.d(TAG, "CameraX bound. lensFacing=" + captureConfig.getLensFacing() + " target=" + targetWidth + "x" + targetHeight);
-        Log.d(ASHISH, "CameraX bound in bindImageAnalysis");
+        boolean bound = runOnMainThreadBlocking("bind image analysis", () -> {
+            provider.unbindAll();
+            Log.d(ASHISH, "Camera invocation: provider.unbindAll called");
+            provider.bindToLifecycle((LifecycleOwner) activity, cameraSelector, imageAnalysis);
+            Log.d(ASHISH, "Camera invocation: provider.bindToLifecycle called");
+            Log.d(TAG, "CameraX bound. lensFacing=" + captureConfig.getLensFacing() + " target=" + targetWidth + "x" + targetHeight);
+            Log.d(ASHISH, "CameraX bound in bindImageAnalysis");
+        });
+        if (!bound) {
+            Log.e(ASHISH, "Failed to bind CameraX on main thread");
+            if (capturerEventsListener != null) {
+                capturerEventsListener.onCapturerEnded();
+            }
+        }
     }
 
     private int cameraFrameCount = 0;
@@ -477,7 +508,12 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         dst.position(0);
     }
 
-    private void onCameraImage(@NonNull ImageProxy imageProxy) {
+    private void onCameraImage(long sessionId, @NonNull ImageProxy imageProxy) {
+        if (sessionId != captureSessionId) {
+            imageProxy.close();
+            return;
+        }
+
         if (!capturing || deepAR == null || inputBuffers == null) {
             imageProxy.close();
             return;
@@ -581,15 +617,19 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             Log.d(ASHISH, "Camera invocation: rebindCamera early exit");
             return;
         }
-        bindImageAnalysis(cameraProvider);
+        bindImageAnalysis(cameraProvider, captureSessionId);
         Log.d(ASHISH, "Camera invocation: rebindCamera completed");
     }
 
     private synchronized void unbindCamera() {
         Log.d(ASHISH, "unbindCamera called");
         Log.d(ASHISH, "Camera invocation: unbindCamera entry");
-        if (cameraProvider != null) {
-            cameraProvider.unbindAll();
+        ProcessCameraProvider provider = cameraProvider;
+        if (provider != null) {
+            boolean unbound = runOnMainThreadBlocking("unbind camera", provider::unbindAll);
+            if (!unbound) {
+                Log.e(ASHISH, "Failed to unbind CameraX on main thread");
+            }
             cameraProvider = null;
             Log.d(ASHISH, "cameraProvider unbound in unbindCamera");
             Log.d(ASHISH, "Camera invocation: cameraProvider unbound in unbindCamera");
@@ -672,6 +712,57 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         RuntimeException error = errorRef.get();
         if (error != null) {
             Log.e(TAG, "runOnFrameThreadBlocking(" + action + ") failed", error);
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean runOnMainThreadBlocking(String action, Runnable task) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            try {
+                task.run();
+                return true;
+            } catch (RuntimeException e) {
+                Log.e(TAG, "runOnMainThreadBlocking(" + action + ") failed", e);
+                return false;
+            }
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<RuntimeException> errorRef = new AtomicReference<>();
+        Handler mainHandler = new Handler(Looper.getMainLooper());
+
+        boolean posted = mainHandler.post(() -> {
+            try {
+                task.run();
+            } catch (RuntimeException e) {
+                errorRef.set(e);
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        if (!posted) {
+            Log.e(ASHISH, "runOnMainThreadBlocking(" + action + ") failed: unable to post task");
+            return false;
+        }
+
+        try {
+            boolean completed = latch.await(MAIN_THREAD_SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (!completed) {
+                Log.e(ASHISH, "runOnMainThreadBlocking(" + action + ") timed out after " + MAIN_THREAD_SYNC_TIMEOUT_MS + "ms");
+                return false;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.e(ASHISH, "runOnMainThreadBlocking(" + action + ") interrupted", e);
+            return false;
+        }
+
+        RuntimeException error = errorRef.get();
+        if (error != null) {
+            Log.e(TAG, "runOnMainThreadBlocking(" + action + ") failed", error);
             return false;
         }
 

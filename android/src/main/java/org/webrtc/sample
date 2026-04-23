@@ -352,7 +352,11 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
     }
     private void initializeDeepAR() {
         deepAR = new DeepAR(this);
-        deepAR.setLicenseKey("b40d07522b8976d959e1ac9bc137a77f67a422aa77d6078efc67249e6f1db63976c2442c340d591c");
+        String licenseKey = getIntent() != null ? getIntent().getStringExtra("DEEPAR_LICENSE_KEY") : null;
+        if (licenseKey == null || licenseKey.trim().isEmpty()) {
+            throw new IllegalStateException("DeepAR license key is required. Pass DEEPAR_LICENSE_KEY via Intent extras.");
+        }
+        deepAR.setLicenseKey(licenseKey);
         deepAR.initialize(this, this);
         setupCamera();
     }

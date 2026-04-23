@@ -220,7 +220,7 @@ class GetUserMediaImpl {
                     videoCaptureController = new CameraCaptureController(
                             currentActivity, getCameraEnumerator(), videoConstraintsMap);
                 }
-                videoCaptureController = new DeepARVideoCaptureController(currentActivity, videoConstraintsMap);
+                // videoCaptureController = new DeepARVideoCaptureController(currentActivity, videoConstraintsMap);
 
 
             } catch (IllegalArgumentException e) {
