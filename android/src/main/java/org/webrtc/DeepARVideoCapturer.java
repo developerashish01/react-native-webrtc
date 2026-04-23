@@ -396,9 +396,9 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             return;
         }
 
-        Executor analyzerExecutor = deepARExecutor;
-        if (analyzerExecutor == null) {
-            Log.e(ASHISH, "Cannot bind analyzer because deepARExecutor is null");
+
+        if (frameHandler == null) {
+            Log.e(ASHISH, "Cannot bind analyzer because frameHandler is null");
             if (capturerEventsListener != null) {
                 capturerEventsListener.onCapturerEnded();
             }
@@ -412,7 +412,15 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .build();
 
-        imageAnalysis.setAnalyzer(analyzerExecutor, image -> onCameraImage(sessionId, image));
+        // Always post to frameHandler to ensure DeepAR is accessed from the correct thread
+        imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(applicationContext), image -> {
+            Handler handler = frameHandler;
+            if (handler != null) {
+                handler.post(() -> onCameraImage(sessionId, image));
+            } else {
+                image.close();
+            }
+        });
         Log.d(ASHISH, "Camera invocation: setAnalyzer on ImageAnalysis");
 
         CameraSelector cameraSelector = new CameraSelector.Builder()
