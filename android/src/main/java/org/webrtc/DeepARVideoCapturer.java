@@ -672,14 +672,17 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     private boolean runOnFrameThreadBlocking(String action, Runnable task) {
         Handler handler = frameHandler;
+        Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") called. handler=" + handler + " looper=" + (handler != null ? handler.getLooper() : "null") + " currentLooper=" + Looper.myLooper());
         if (handler == null) {
             Log.e(ASHISH, "runOnFrameThreadBlocking(" + action + ") failed: frameHandler is null");
             return false;
         }
 
         if (Looper.myLooper() == handler.getLooper()) {
+            Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") running directly on frame thread");
             try {
                 task.run();
+                Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") task.run() finished");
                 return true;
             } catch (RuntimeException e) {
                 Log.e(TAG, "runOnFrameThreadBlocking(" + action + ") failed", e);
@@ -691,14 +694,18 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         AtomicReference<RuntimeException> errorRef = new AtomicReference<>();
 
         boolean posted = handler.post(() -> {
+            Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") Runnable started on thread: " + Thread.currentThread().getName());
             try {
                 task.run();
+                Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") Runnable finished");
             } catch (RuntimeException e) {
                 errorRef.set(e);
             } finally {
                 latch.countDown();
             }
         });
+
+        Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") posted=" + posted);
 
         if (!posted) {
             Log.e(ASHISH, "runOnFrameThreadBlocking(" + action + ") failed: unable to post task");
@@ -707,6 +714,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
         try {
             boolean completed = latch.await(FRAME_THREAD_SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") latch completed=" + completed);
             if (!completed) {
                 Log.e(ASHISH, "runOnFrameThreadBlocking(" + action + ") timed out after " + FRAME_THREAD_SYNC_TIMEOUT_MS + "ms");
                 return false;
