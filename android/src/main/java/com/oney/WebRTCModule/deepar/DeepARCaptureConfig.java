@@ -3,6 +3,7 @@ package com.oney.WebRTCModule.deepar;
 import androidx.camera.core.CameraSelector;
 
 import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.ReadableType;
 
 import com.oney.WebRTCModule.ReactBridgeUtil;
 
@@ -12,7 +13,6 @@ import com.oney.WebRTCModule.ReactBridgeUtil;
 public class DeepARCaptureConfig {
     public static final String SOURCE_NAME = "deepar";
     private static final String ANDROID_ASSET_PREFIX = "file:///android_asset/";
-    private static final String DEFAULT_EFFECT_FILENAME = "background_blur.deepar";
     private static final int MAX_FRAME_PIXELS = 960 * 540;
     private static final int MAX_FPS = 15;
         private static final int[][] STANDARD_4_3_SIZES = new int[][] {
@@ -126,6 +126,42 @@ public class DeepARCaptureConfig {
         return new int[] { normalizedWidth, normalizedHeight };
     }
 
+    private static int readIntFromMap(ReadableMap map, String key, int fallback) {
+        if (map == null || !map.hasKey(key)) {
+            return fallback;
+        }
+
+        ReadableType type = map.getType(key);
+        if (type == ReadableType.Number) {
+            return Math.max(1, map.getInt(key));
+        }
+
+        if (type == ReadableType.Map) {
+            ReadableMap nested = map.getMap(key);
+            if (nested != null) {
+                if (nested.hasKey("exact") && nested.getType("exact") == ReadableType.Number) {
+                    return Math.max(1, nested.getInt("exact"));
+                }
+                if (nested.hasKey("ideal") && nested.getType("ideal") == ReadableType.Number) {
+                    return Math.max(1, nested.getInt("ideal"));
+                }
+                if (nested.hasKey("max") && nested.getType("max") == ReadableType.Number) {
+                    return Math.max(1, nested.getInt("max"));
+                }
+                if (nested.hasKey("min") && nested.getType("min") == ReadableType.Number) {
+                    return Math.max(1, nested.getInt("min"));
+                }
+            }
+        }
+
+        return fallback;
+    }
+
+    private static int readFrameRate(ReadableMap videoConstraints) {
+        int requestedFps = readIntFromMap(videoConstraints, "frameRate", MAX_FPS);
+        return Math.min(Math.max(1, requestedFps), MAX_FPS);
+    }
+
     public static boolean isDeepARSource(ReadableMap videoConstraints) {
         android.util.Log.d("ASHISH", "isDeepARSource called with: " + videoConstraints);
         String source = ReactBridgeUtil.getMapStrValue(videoConstraints, "source");
@@ -166,12 +202,12 @@ public class DeepARCaptureConfig {
                 ? CameraSelector.LENS_FACING_BACK
                 : CameraSelector.LENS_FACING_FRONT;
 
-        int width = Math.max(2, videoConstraints.getInt("width"));
-        int height = Math.max(2, videoConstraints.getInt("height"));
+        int width = Math.max(2, readIntFromMap(videoConstraints, "width", 640));
+        int height = Math.max(2, readIntFromMap(videoConstraints, "height", 480));
         int[] normalizedSize = normalizeToFourThree(width, height);
         width = normalizedSize[0];
         height = normalizedSize[1];
-        int frameRate = Math.min(videoConstraints.getInt("frameRate"), MAX_FPS);
+        int frameRate = readFrameRate(videoConstraints);
         android.util.Log.d("ASHISH", "DeepAR effective capture config width=" + width + " height=" + height + " fps=" + frameRate);
 
         String effectPath = null;
@@ -196,8 +232,7 @@ public class DeepARCaptureConfig {
         effectPath = normalizeEffectPath(effectPath);
 
         if (effectPath == null) {
-            effectPath = ANDROID_ASSET_PREFIX + DEFAULT_EFFECT_FILENAME;
-            android.util.Log.w("ASHISH", "No DeepAR effect provided in constraints, defaulting to: " + effectPath);
+            android.util.Log.w("ASHISH", "No DeepAR effect provided in constraints. DeepAR will run with no effect.");
         } else {
             android.util.Log.d("ASHISH", "Resolved DeepAR effectPath: " + effectPath);
         }

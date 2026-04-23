@@ -44,8 +44,6 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private static final String TAG = DeepARVideoCapturer.class.getSimpleName();
     private static final String ASHISH = "ASHISH";
     private static final String ZOOM_DEBUG_TAG = "DeepARZoom";
-    private static final String ANDROID_ASSET_PREFIX = "file:///android_asset/";
-    private static final String DEFAULT_FALLBACK_EFFECT = "background_blur.deepar";
     private static final int NUMBER_OF_INPUT_BUFFERS = 2;
     private static final long FRAME_THREAD_SYNC_TIMEOUT_MS = 5000;
     private static final long MAIN_THREAD_SYNC_TIMEOUT_MS = 5000;
@@ -578,7 +576,8 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         lastCameraInputWidth = width;
         lastCameraInputHeight = height;
         lastCameraInputRotation = rotation;
-        final boolean mirror = captureConfig.getLensFacing() == CameraSelector.LENS_FACING_FRONT;
+        // Jitsi integration expects non-mirrored DeepAR output.
+        final boolean mirror = false;
 
         try {
             if (!capturing || deepAR == null) {
@@ -791,8 +790,13 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     public void initialized() {
         Log.d(ASHISH, "DeepAR initialized callback received");
         Log.d(TAG, "DeepAR initialized callback received.");
-        String effectPath = resolveEffectPathWithFallback(captureConfig.getEffectPath());
+        String effectPath = captureConfig.getEffectPath();
         if (effectPath != null && !effectPath.isEmpty()) {
+            if (!assetPathExists(effectPath)) {
+                Log.e(ASHISH, "Requested DeepAR effect asset is missing: " + effectPath);
+                Log.w(ASHISH, "Continuing with no DeepAR effect.");
+                return;
+            }
             Log.d(ASHISH, "Switching effect to: " + effectPath);
             Log.d(TAG, "Switching effect to: " + effectPath);
             final String resolvedEffectPath = effectPath;
@@ -817,28 +821,12 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         deepAR.switchEffect("effect", effectPath);
     }
 
-    private String resolveEffectPathWithFallback(String requestedEffectPath) {
-        String effectPath = requestedEffectPath;
-        if (!assetPathExists(effectPath)) {
-            Log.e(ASHISH, "Requested DeepAR effect asset is missing: " + effectPath);
-            String fallback = ANDROID_ASSET_PREFIX + DEFAULT_FALLBACK_EFFECT;
-            if (assetPathExists(fallback)) {
-                Log.w(ASHISH, "Falling back to bundled DeepAR effect: " + fallback);
-                effectPath = fallback;
-            } else {
-                Log.e(ASHISH, "Fallback DeepAR effect asset also missing: " + fallback);
-            }
-        }
-
-        return effectPath;
-    }
-
     private boolean assetPathExists(String path) {
-        if (path == null || !path.startsWith(ANDROID_ASSET_PREFIX) || applicationContext == null) {
+        if (path == null || !path.startsWith("file:///android_asset/") || applicationContext == null) {
             return true;
         }
 
-        String assetRelativePath = path.substring(ANDROID_ASSET_PREFIX.length());
+        String assetRelativePath = path.substring("file:///android_asset/".length());
         try {
             applicationContext.getAssets().open(assetRelativePath).close();
             return true;
