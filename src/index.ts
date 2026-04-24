@@ -1,3 +1,15 @@
+/**
+ * Switches the DeepAR effect for a given video track.
+ * @param trackId The id of the video track.
+ * @param effectPath The path to the new DeepAR effect.
+ */
+export function switchDeepAREffect(trackId: string, effectPath: string) {
+    if (WebRTCModule && typeof WebRTCModule.switchDeepAREffect === 'function') {
+        WebRTCModule.switchDeepAREffect(trackId, effectPath);
+    } else {
+        throw new Error('WebRTCModule.switchDeepAREffect is not available');
+    }
+}
 import { NativeModules, Platform } from 'react-native';
 const { WebRTCModule } = NativeModules;
 

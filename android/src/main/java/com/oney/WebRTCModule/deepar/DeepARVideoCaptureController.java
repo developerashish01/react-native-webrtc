@@ -25,6 +25,16 @@ public class DeepARVideoCaptureController extends AbstractVideoCaptureController
         this.config = config;
     }
 
+    /**
+     * Switches the DeepAR effect at runtime if the underlying capturer is available.
+     * @param effectPath The path to the new DeepAR effect.
+     */
+    public void switchEffect(String effectPath) {
+        if (videoCapturer instanceof DeepARVideoCapturer) {
+            ((DeepARVideoCapturer) videoCapturer).switchEffect(effectPath);
+        }
+    }
+
     @Nullable
     @Override
     public String getDeviceId() {

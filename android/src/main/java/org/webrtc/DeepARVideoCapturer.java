@@ -81,6 +81,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private volatile int lastCameraInputWidth;
     private volatile int lastCameraInputHeight;
     private volatile int lastCameraInputRotation;
+    private volatile long deepARThreadId;
 
     @Nullable
     private CapturerEventsListener capturerEventsListener;
@@ -94,6 +95,22 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         this.targetFps = captureConfig.getFrameRate();
         updateFrameRateThrottle(this.targetFps);
         Log.d(ASHISH, "DeepARVideoCapturer initialized with width=" + targetWidth + ", height=" + targetHeight + ", fps=" + targetFps);
+    }
+
+    /**
+     * Switches the DeepAR effect at runtime. Can be called from the main project via the controller chain.
+     * @param effectPath The path to the new DeepAR effect.
+     */
+    public void switchEffect(final String effectPath) {
+        Log.d(ASHISH, "switchEffect called with effectPath=" + effectPath);
+        if (deepAR == null || effectPath == null || effectPath.isEmpty()) {
+            Log.e(ASHISH, "switchEffect: DeepAR not initialized or effectPath empty");
+            return;
+        }
+        long startTime = System.currentTimeMillis();
+        boolean result = runOnFrameThreadBlocking("switch effect", () -> switchEffectInternal(effectPath));
+        long endTime = System.currentTimeMillis();
+        Log.d(ASHISH, "switchEffect finished for effectPath=" + effectPath + ", duration=" + (endTime - startTime) + "ms, result=" + result);
     }
 
     private void updateFrameRateThrottle(int fps) {
@@ -211,6 +228,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         frameThread = new HandlerThread("DeepARFrameThread");
         frameThread.start();
         frameHandler = new Handler(frameThread.getLooper());
+        deepARThreadId = frameThread.getLooper().getThread().getId();
         deepARExecutor = command -> {
             Handler handler = frameHandler;
             if (handler != null) {
@@ -301,6 +319,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             frameThread = null;
             frameHandler = null;
             deepARExecutor = null;
+            deepARThreadId = 0L;
         }
 
         inputBuffers = null;
@@ -412,15 +431,16 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .build();
 
-        // Always post to frameHandler to ensure DeepAR is accessed from the correct thread
-        imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(applicationContext), image -> {
-            Handler handler = frameHandler;
-            if (handler != null) {
-                handler.post(() -> onCameraImage(sessionId, image));
-            } else {
-                image.close();
+        // Run analyzer directly on DeepAR executor so receiveFrame stays on the init thread.
+        Executor analyzerExecutor = deepARExecutor;
+        if (analyzerExecutor == null) {
+            Log.e(ASHISH, "Cannot bind analyzer because deepARExecutor is null");
+            if (capturerEventsListener != null) {
+                capturerEventsListener.onCapturerEnded();
             }
-        });
+            return;
+        }
+        imageAnalysis.setAnalyzer(analyzerExecutor, image -> onCameraImage(sessionId, image));
         Log.d(ASHISH, "Camera invocation: setAnalyzer on ImageAnalysis");
 
         CameraSelector cameraSelector = new CameraSelector.Builder()
@@ -579,42 +599,53 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         // Jitsi integration expects non-mirrored DeepAR output.
         final boolean mirror = false;
 
-        try {
-            if (!capturing || deepAR == null) {
-                return;
-            }
 
-            deepAR.receiveFrame(
-                    bufferForDeepAR,
-                    width,
-                    height,
-                    rotation,
-                    mirror,
-                    DeepARImageFormat.RGBA_8888,
-                    outputRowStride);
-
-            cameraFrameCount++;
-            if (cameraFrameCount % 120 == 1) {
-                Log.d(TAG, "onCameraImage #" + cameraFrameCount + " size=" + width + "x" + height + " rotation=" + rotation);
-            }
-            if (cameraFrameCount % 60 == 1) {
-                logZoomEstimate(
-                        "camera->deepar",
+        Runnable doReceiveFrame = () -> {
+            try {
+                if (!capturing || deepAR == null) {
+                    imageProxy.close();
+                    return;
+                }
+                deepAR.receiveFrame(
+                        bufferForDeepAR,
                         width,
                         height,
-                        targetWidth,
-                        targetHeight,
                         rotation,
-                        rowStride,
-                        outputRowStride,
                         mirror,
-                        cameraFrameCount);
+                        DeepARImageFormat.RGBA_8888,
+                        outputRowStride);
+
+                cameraFrameCount++;
+                if (cameraFrameCount % 120 == 1) {
+                    Log.d(TAG, "onCameraImage #" + cameraFrameCount + " size=" + width + "x" + height + " rotation=" + rotation);
+                }
+                if (cameraFrameCount % 60 == 1) {
+                    logZoomEstimate(
+                            "camera->deepar",
+                            width,
+                            height,
+                            targetWidth,
+                            targetHeight,
+                            rotation,
+                            rowStride,
+                            outputRowStride,
+                            mirror,
+                            cameraFrameCount);
+                }
+            } catch (RuntimeException e) {
+                Log.e(ASHISH, "deepAR.receiveFrame failed: " + e.getMessage());
+                Log.e(TAG, "deepAR.receiveFrame failed", e);
+            } finally {
+                imageProxy.close();
             }
-        } catch (RuntimeException e) {
-            Log.e(ASHISH, "deepAR.receiveFrame failed: " + e.getMessage());
-            Log.e(TAG, "deepAR.receiveFrame failed", e);
-        } finally {
-            imageProxy.close();
+        };
+
+        long currentThreadId = Thread.currentThread().getId();
+        if (deepARThreadId != 0L && currentThreadId != deepARThreadId && frameHandler != null) {
+            Log.w(ASHISH, "onCameraImage rerouting frame to DeepAR thread: current=" + currentThreadId + " expected=" + deepARThreadId + " name=" + Thread.currentThread().getName());
+            frameHandler.post(doReceiveFrame);
+        } else {
+            doReceiveFrame.run();
         }
     }
 
@@ -680,6 +711,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         }
 
         if (Looper.myLooper() == handler.getLooper()) {
+            deepARThreadId = Thread.currentThread().getId();
             Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") running directly on frame thread");
             try {
                 task.run();
@@ -697,6 +729,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         boolean posted = handler.post(() -> {
             Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") Runnable started on thread: " + Thread.currentThread().getName());
             try {
+                deepARThreadId = Thread.currentThread().getId();
                 task.run();
                 Log.d(ASHISH, "runOnFrameThreadBlocking(" + action + ") Runnable finished");
             } catch (RuntimeException e) {
@@ -803,8 +836,6 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             boolean switched = runOnFrameThreadBlocking("switch effect", () -> switchEffectInternal(resolvedEffectPath));
             if (!switched) {
                 Log.e(ASHISH, "Failed to switch DeepAR effect on frame thread: " + effectPath);
-                // Fallback: try on current callback thread if frame-thread switch fails.
-                switchEffectInternal(effectPath);
             }
         } else {
             Log.w(ASHISH, "No effectPath provided — DeepAR will run as passthrough (no AR effect).");
@@ -817,8 +848,11 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             Log.e(ASHISH, "Cannot switch effect because DeepAR instance is null");
             return;
         }
-        Log.d(ASHISH, "applying effects in initialized callback");
+        Log.d(ASHISH, "switchEffectInternal: About to apply effectPath=" + effectPath);
+        long start = System.currentTimeMillis();
         deepAR.switchEffect("effect", effectPath);
+        long end = System.currentTimeMillis();
+        Log.d(ASHISH, "switchEffectInternal: Applied effectPath=" + effectPath + ", duration=" + (end - start) + "ms");
     }
 
     private boolean assetPathExists(String path) {

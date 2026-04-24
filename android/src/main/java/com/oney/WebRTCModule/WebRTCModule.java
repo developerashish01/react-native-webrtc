@@ -51,6 +51,16 @@ public class WebRTCModule extends ReactContextBaseJavaModule {
 
     private final GetUserMediaImpl getUserMediaImpl;
 
+    /**
+     * Switches the DeepAR effect for the given video track.
+     * @param trackId The id of the video track.
+     * @param effectPath The path to the new DeepAR effect.
+     */
+    @ReactMethod
+    public void switchDeepAREffect(String trackId, String effectPath) {
+        getUserMediaImpl.switchDeepAREffect(trackId, effectPath);
+    }
+
     public WebRTCModule(ReactApplicationContext reactContext) {
         super(reactContext);
 

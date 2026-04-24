@@ -63,6 +63,18 @@ class GetUserMediaImpl {
     private Promise displayMediaPromise;
     private Intent mediaProjectionPermissionResultData;
 
+    /**
+     * Switches the DeepAR effect for the given video track if it is using DeepAR.
+     * @param trackId The id of the video track.
+     * @param effectPath The path to the new DeepAR effect.
+     */
+    void switchDeepAREffect(String trackId, String effectPath) {
+        TrackPrivate track = tracks.get(trackId);
+        if (track != null && track.videoCaptureController instanceof com.oney.WebRTCModule.deepar.DeepARVideoCaptureController) {
+            ((com.oney.WebRTCModule.deepar.DeepARVideoCaptureController) track.videoCaptureController).switchEffect(effectPath);
+        }
+    }
+
     GetUserMediaImpl(WebRTCModule webRTCModule, ReactApplicationContext reactContext) {
         this.webRTCModule = webRTCModule;
         this.reactContext = reactContext;
