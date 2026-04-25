@@ -4,9 +4,18 @@
  * @param effectPath The path to the new DeepAR effect.
  */
 export function switchDeepAREffect(trackId: string, effectPath: string) {
+    Logger.info('[switchDeepAREffect] called', { trackId, effectPath });
     if (WebRTCModule && typeof WebRTCModule.switchDeepAREffect === 'function') {
-        WebRTCModule.switchDeepAREffect(trackId, effectPath);
+        try {
+            Logger.info('[switchDeepAREffect] invoking WebRTCModule.switchDeepAREffect', { trackId, effectPath });
+            WebRTCModule.switchDeepAREffect(trackId, effectPath);
+            Logger.info('[switchDeepAREffect] WebRTCModule.switchDeepAREffect call finished');
+        } catch (err) {
+            Logger.error('[switchDeepAREffect] Exception during WebRTCModule.switchDeepAREffect', err);
+            throw err;
+        }
     } else {
+        Logger.error('[switchDeepAREffect] WebRTCModule.switchDeepAREffect is not available', { WebRTCModule });
         throw new Error('WebRTCModule.switchDeepAREffect is not available');
     }
 }
