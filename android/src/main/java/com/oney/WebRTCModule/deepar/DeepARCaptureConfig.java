@@ -13,14 +13,10 @@ import com.oney.WebRTCModule.ReactBridgeUtil;
 public class DeepARCaptureConfig {
     public static final String SOURCE_NAME = "deepar";
     private static final String ANDROID_ASSET_PREFIX = "file:///android_asset/";
-    private static final int MAX_FRAME_PIXELS = 960 * 540;
+    private static final int MAX_FRAME_PIXELS = 1280 * 720;
     private static final int MAX_FPS = 15;
-        private static final int[][] STANDARD_4_3_SIZES = new int[][] {
-            {960, 720},
-            {640, 480},
-            {480, 360},
-            {320, 240}
-        };
+    private static final double ASPECT_RATIO_16_9 = 16.0 / 9.0;
+    private static final double ASPECT_RATIO_4_3 = 4.0 / 3.0;
 
     private final String licenseKey;
     private final int lensFacing;
@@ -101,29 +97,36 @@ public class DeepARCaptureConfig {
         return (positive % 2 == 0) ? positive : positive - 1;
     }
 
-    private static int[] normalizeToFourThree(int width, int height) {
-        boolean portrait = height > width;
-        long requestPixels = (long) width * (long) height;
-        long pixelBudget = Math.min((long) MAX_FRAME_PIXELS, requestPixels);
+    private static int[] normalizeSizePreservingAspect(int width, int height) {
+        int safeWidth = ensureEven(width);
+        int safeHeight = ensureEven(height);
+        long requestedPixels = (long) safeWidth * (long) safeHeight;
 
-        int[] selected = STANDARD_4_3_SIZES[STANDARD_4_3_SIZES.length - 1];
-        for (int[] candidate : STANDARD_4_3_SIZES) {
-            long candidatePixels = (long) candidate[0] * (long) candidate[1];
-            if (candidatePixels <= pixelBudget) {
-                selected = candidate;
-                break;
-            }
+        if (requestedPixels <= MAX_FRAME_PIXELS) {
+            return new int[] { safeWidth, safeHeight };
         }
 
-        int normalizedWidth = ensureEven(selected[0]);
-        int normalizedHeight = ensureEven(selected[1]);
-        if (portrait) {
-            int temp = normalizedWidth;
-            normalizedWidth = normalizedHeight;
-            normalizedHeight = temp;
+        double scale = Math.sqrt((double) MAX_FRAME_PIXELS / (double) requestedPixels);
+        int scaledWidth = ensureEven((int) Math.floor(safeWidth * scale));
+        int scaledHeight = ensureEven((int) Math.floor(safeHeight * scale));
+
+        return new int[] { scaledWidth, scaledHeight };
+    }
+
+    private static int[] normalizeCameraFriendlySize(int width, int height) {
+        int safeWidth = ensureEven(width);
+        int safeHeight = ensureEven(height);
+        double requestedAspect = (double) safeWidth / (double) safeHeight;
+        double normalizedAspect = Math.abs(requestedAspect - ASPECT_RATIO_16_9) <= Math.abs(requestedAspect - ASPECT_RATIO_4_3)
+                ? ASPECT_RATIO_16_9
+                : ASPECT_RATIO_4_3;
+
+        int normalizedHeight = ensureEven((int) Math.round(safeWidth / normalizedAspect));
+        if (normalizedHeight <= 0) {
+            normalizedHeight = safeHeight;
         }
 
-        return new int[] { normalizedWidth, normalizedHeight };
+        return normalizeSizePreservingAspect(safeWidth, normalizedHeight);
     }
 
     private static int readIntFromMap(ReadableMap map, String key, int fallback) {
@@ -202,9 +205,9 @@ public class DeepARCaptureConfig {
                 ? CameraSelector.LENS_FACING_BACK
                 : CameraSelector.LENS_FACING_FRONT;
 
-        int width = Math.max(2, readIntFromMap(videoConstraints, "width", 640));
+        int width =Math.max(2, readIntFromMap(videoConstraints, "width", 640));
         int height = Math.max(2, readIntFromMap(videoConstraints, "height", 480));
-        int[] normalizedSize = normalizeToFourThree(width, height);
+        int[] normalizedSize = normalizeCameraFriendlySize(width, height);
         width = normalizedSize[0];
         height = normalizedSize[1];
         int frameRate = readFrameRate(videoConstraints);

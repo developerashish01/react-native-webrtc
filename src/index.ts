@@ -3,19 +3,20 @@
  * @param trackId The id of the video track.
  * @param effectPath The path to the new DeepAR effect.
  */
+const log = new Logger('switchDeepAREffect');
 export function switchDeepAREffect(trackId: string, effectPath: string) {
-    Logger.info('[switchDeepAREffect] called', { trackId, effectPath });
+    log.info(`[switchDeepAREffect] called: trackId=${trackId}, effectPath=${effectPath}`);
     if (WebRTCModule && typeof WebRTCModule.switchDeepAREffect === 'function') {
         try {
-            Logger.info('[switchDeepAREffect] invoking WebRTCModule.switchDeepAREffect', { trackId, effectPath });
+            log.info(`[switchDeepAREffect] invoking WebRTCModule.switchDeepAREffect: trackId=${trackId}, effectPath=${effectPath}`);
             WebRTCModule.switchDeepAREffect(trackId, effectPath);
-            Logger.info('[switchDeepAREffect] WebRTCModule.switchDeepAREffect call finished');
+            log.info('[switchDeepAREffect] WebRTCModule.switchDeepAREffect call finished');
         } catch (err) {
-            Logger.error('[switchDeepAREffect] Exception during WebRTCModule.switchDeepAREffect', err);
+            log.error('[switchDeepAREffect] Exception during WebRTCModule.switchDeepAREffect');
             throw err;
         }
     } else {
-        Logger.error('[switchDeepAREffect] WebRTCModule.switchDeepAREffect is not available', { WebRTCModule });
+        log.error('[switchDeepAREffect] WebRTCModule.switchDeepAREffect is not available', new Error('WebRTCModule.switchDeepAREffect is not available'));
         throw new Error('WebRTCModule.switchDeepAREffect is not available');
     }
 }
