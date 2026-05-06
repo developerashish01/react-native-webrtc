@@ -67,8 +67,8 @@ dependencies {
     implementation "androidx.camera:camera-camera2:1.3.4"
     implementation "androidx.camera:camera-lifecycle:1.3.4"
     if (deepArAarPath != null && file(deepArAarPath).exists()) {
-        implementation files(deepArAarPath)
+       api files(deepArAarPath)
     } else {
-        implementation safeExtGet('deepArDependency', 'ai.deepar.ar:deepar:5.6.0')
+        api safeExtGet('deepArDependency', 'ai.deepar.ar:deepar:5.6.0')
     }
 }
