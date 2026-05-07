@@ -14,7 +14,7 @@ public class DeepARCaptureConfig {
     public static final String SOURCE_NAME = "deepar";
     private static final String ANDROID_ASSET_PREFIX = "file:///android_asset/";
     private static final int MAX_FRAME_PIXELS = 1280 * 720;
-    private static final int MAX_FPS = 15;
+    private static final int MAX_FPS = 30;
     private static final double ASPECT_RATIO_16_9 = 16.0 / 9.0;
     private static final double ASPECT_RATIO_4_3 = 4.0 / 3.0;
 

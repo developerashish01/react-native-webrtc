@@ -15,6 +15,9 @@ import androidx.annotation.Nullable;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
+import androidx.camera.core.resolutionselector.AspectRatioStrategy;
+import androidx.camera.core.resolutionselector.ResolutionSelector;
+import androidx.camera.core.resolutionselector.ResolutionStrategy;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LifecycleOwner;
@@ -25,6 +28,8 @@ import com.oney.WebRTCModule.deepar.DeepARCaptureConfig;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -494,10 +499,35 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
         double targetAspect = safeAspect(targetWidth, targetHeight);
 
+        Size targetResolution = new Size(targetWidth, targetHeight);
+        long targetPixels = (long) targetWidth * (long) targetHeight;
+        ResolutionSelector resolutionSelector = new ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(new ResolutionStrategy(
+                    targetResolution,
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+            .setResolutionFilter((supportedSizes, rotationDegrees) -> {
+                List<Size> preferredSizes = new ArrayList<>();
+                for (Size size : supportedSizes) {
+                    if (size.getWidth() == targetWidth && size.getHeight() == targetHeight) {
+                        preferredSizes.add(size);
+                    }
+                }
+                for (Size size : supportedSizes) {
+                    long pixels = (long) size.getWidth() * (long) size.getHeight();
+                    if (pixels <= targetPixels && !preferredSizes.contains(size)) {
+                        preferredSizes.add(size);
+                    }
+                }
+                return preferredSizes.isEmpty() ? supportedSizes : preferredSizes;
+            })
+            .build();
+
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setTargetResolution(new Size(targetWidth, targetHeight))
+            .setResolutionSelector(resolutionSelector)
+            .setBackgroundExecutor(cameraExecutor)
             .build();
 
         Log.d(
@@ -530,6 +560,10 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             Log.d(ASHISH, "Camera invocation: provider.bindToLifecycle called");
             Log.d(TAG, "CameraX bound. lensFacing=" + captureConfig.getLensFacing() + " target=" + targetWidth + "x" + targetHeight);
             Log.d(ASHISH, "CameraX bound in bindImageAnalysis");
+            if (imageAnalysis.getResolutionInfo() != null) {
+                Size selectedResolution = imageAnalysis.getResolutionInfo().getResolution();
+                Log.d(ASHISH, "CameraX selected analysis resolution=" + selectedResolution.getWidth() + "x" + selectedResolution.getHeight());
+            }
         });
         if (!bound) {
             Log.e(ASHISH, "Failed to bind CameraX on main thread");
