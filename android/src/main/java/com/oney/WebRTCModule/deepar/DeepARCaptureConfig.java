@@ -205,8 +205,8 @@ public class DeepARCaptureConfig {
                 ? CameraSelector.LENS_FACING_BACK
                 : CameraSelector.LENS_FACING_FRONT;
 
-        int width =Math.max(2, readIntFromMap(videoConstraints, "width", 640));
-        int height = Math.max(2, readIntFromMap(videoConstraints, "height", 480));
+        int width = Math.max(2, readIntFromMap(videoConstraints, "width", 1280));
+        int height = Math.max(2, readIntFromMap(videoConstraints, "height", 720));
         int[] normalizedSize = normalizeCameraFriendlySize(width, height);
         width = normalizedSize[0];
         height = normalizedSize[1];

@@ -29,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
@@ -51,6 +52,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private static final String ASHISH = "ASHISH";
     private static final String ZOOM_DEBUG_TAG = "DeepARZoom";
     private static final int NUMBER_OF_INPUT_BUFFERS = 2;
+    private static final int MAX_CAMERA_INPUT_PIXELS = 1280 * 720;
     private static final long FRAME_THREAD_SYNC_TIMEOUT_MS = 5000;
     private static final long MAIN_THREAD_SYNC_TIMEOUT_MS = 5000;
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
@@ -508,6 +510,8 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
                     ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
             .setResolutionFilter((supportedSizes, rotationDegrees) -> {
                 List<Size> preferredSizes = new ArrayList<>();
+                List<Size> nearHigherSizes = new ArrayList<>();
+                List<Size> lowerSizes = new ArrayList<>();
                 for (Size size : supportedSizes) {
                     if (size.getWidth() == targetWidth && size.getHeight() == targetHeight) {
                         preferredSizes.add(size);
@@ -515,10 +519,22 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
                 }
                 for (Size size : supportedSizes) {
                     long pixels = (long) size.getWidth() * (long) size.getHeight();
-                    if (pixels <= targetPixels && !preferredSizes.contains(size)) {
-                        preferredSizes.add(size);
+                    if (preferredSizes.contains(size)) {
+                        continue;
+                    }
+                    if (pixels > targetPixels && pixels <= MAX_CAMERA_INPUT_PIXELS) {
+                        nearHigherSizes.add(size);
+                    } else if (pixels <= targetPixels) {
+                        lowerSizes.add(size);
                     }
                 }
+                nearHigherSizes.sort(Comparator.comparingLong(size ->
+                        ((long) size.getWidth() * (long) size.getHeight()) - targetPixels));
+                lowerSizes.sort((left, right) -> Long.compare(
+                        (long) right.getWidth() * (long) right.getHeight(),
+                        (long) left.getWidth() * (long) left.getHeight()));
+                preferredSizes.addAll(nearHigherSizes);
+                preferredSizes.addAll(lowerSizes);
                 return preferredSizes.isEmpty() ? supportedSizes : preferredSizes;
             })
             .build();
@@ -949,16 +965,20 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             inputBuffers[bufferIndex].order(ByteOrder.nativeOrder());
             deepARInputBuffer = inputBuffers[bufferIndex];
         }
-        renderRgbaAspectFit(
-                source,
-                width,
-                height,
-                rowStride,
-                pixelStride,
-                rotation,
-                deepARInputBuffer,
-                deepARInputWidth,
-                deepARInputHeight);
+        if (rotation == 0 && width == deepARInputWidth && height == deepARInputHeight) {
+            packRgba8888(source, width, height, rowStride, pixelStride, deepARInputBuffer);
+        } else {
+            renderRgbaAspectFit(
+                    source,
+                    width,
+                    height,
+                    rowStride,
+                    pixelStride,
+                    rotation,
+                    deepARInputBuffer,
+                    deepARInputWidth,
+                    deepARInputHeight);
+        }
         currentInputBuffer = (currentInputBuffer + 1) % NUMBER_OF_INPUT_BUFFERS;
         final ByteBuffer bufferForDeepAR = deepARInputBuffer;
 
