@@ -12,7 +12,6 @@ import com.oney.WebRTCModule.ReactBridgeUtil;
  */
 public class DeepARCaptureConfig {
     public static final String SOURCE_NAME = "deepar";
-    private static final String ANDROID_ASSET_PREFIX = "file:///android_asset/";
     private static final int MAX_FRAME_PIXELS = 1280 * 720;
     private static final int MAX_FPS = 30;
     private static final double ASPECT_RATIO_16_9 = 16.0 / 9.0;
@@ -58,7 +57,7 @@ public class DeepARCaptureConfig {
         return effectPath;
     }
 
-    private static String normalizeEffectPath(String rawPath) {
+    public static String normalizeEffectPath(String rawPath) {
         if (rawPath == null) {
             return null;
         }
@@ -80,16 +79,11 @@ public class DeepARCaptureConfig {
             return "file:///" + path;
         }
 
-        // Desktop/host absolute paths do not exist on Android devices.
-        // Fall back to loading by filename from app assets.
         if (path.startsWith("/")) {
-            int slashIndex = path.lastIndexOf('/');
-            if (slashIndex >= 0 && slashIndex + 1 < path.length()) {
-                path = path.substring(slashIndex + 1);
-            }
+            return "file://" + path;
         }
 
-        return ANDROID_ASSET_PREFIX + path;
+        return path;
     }
 
     private static int ensureEven(int value) {

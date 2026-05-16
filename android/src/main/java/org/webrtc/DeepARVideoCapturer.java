@@ -116,11 +116,13 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
      */
     public void switchEffect(final String effectPath) {
         Log.d(ASHISH, "switchEffect called with effectPath=" + effectPath);
-        if (!capturing || deepAR == null || effectPath == null || effectPath.isEmpty()) {
-            Log.e(ASHISH, "switchEffect: capturer not running, DeepAR not initialized, or effectPath empty");
+        if (!capturing || deepAR == null || effectPath == null) {
+            Log.e(ASHISH, "switchEffect: capturer not running, DeepAR not initialized, or effectPath null");
             return;
         }
 
+        final String resolvedEffectPath = DeepARCaptureConfig.normalizeEffectPath(effectPath);
+        final String pathToApply = resolvedEffectPath == null ? "" : resolvedEffectPath;
         final long expectedSessionId = captureSessionId;
         runOnFrameThread("switch effect", () -> {
             if (!capturing || deepAR == null || captureSessionId != expectedSessionId) {
@@ -128,9 +130,9 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
                 return;
             }
             long startTime = System.currentTimeMillis();
-            switchEffectInternal(effectPath);
+            switchEffectInternal(pathToApply);
             long endTime = System.currentTimeMillis();
-            Log.d(ASHISH, "switchEffect finished for effectPath=" + effectPath + ", duration=" + (endTime - startTime) + "ms");
+            Log.d(ASHISH, "switchEffect finished for effectPath=" + pathToApply + ", duration=" + (endTime - startTime) + "ms");
         });
     }
 
