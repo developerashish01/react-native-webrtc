@@ -80,7 +80,7 @@ public class DeepARCaptureConfig {
         }
 
         if (path.startsWith("/")) {
-            return "file://" + path;
+            return path;
         }
 
         return path;
