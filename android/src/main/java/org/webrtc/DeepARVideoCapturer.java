@@ -69,6 +69,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     private DeepAR deepAR;
 
     private volatile boolean capturing;
+    private volatile boolean deepARInitialized;
     private int targetWidth;
     private int targetHeight;
     private int targetFps;
@@ -116,8 +117,8 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
      */
     public void switchEffect(final String effectPath) {
         Log.d(ASHISH, "switchEffect called with effectPath=" + effectPath);
-        if (!capturing || deepAR == null || effectPath == null) {
-            Log.e(ASHISH, "switchEffect: capturer not running, DeepAR not initialized, or effectPath null");
+        if (!capturing || deepAR == null || !deepARInitialized || effectPath == null) {
+            Log.e(ASHISH, "switchEffect: capturer not running, DeepAR not ready, or effectPath null");
             return;
         }
 
@@ -125,7 +126,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         final String pathToApply = resolvedEffectPath == null ? "" : resolvedEffectPath;
         final long expectedSessionId = captureSessionId;
         runOnFrameThread("switch effect", () -> {
-            if (!capturing || deepAR == null || captureSessionId != expectedSessionId) {
+            if (!capturing || deepAR == null || !deepARInitialized || captureSessionId != expectedSessionId) {
                 Log.d(ASHISH, "switchEffect skipped for stale/inactive session=" + expectedSessionId);
                 return;
             }
@@ -158,7 +159,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     }
 
     private void applyOffscreenRenderingOnFrameThread(int width, int height, String reason) {
-        if (deepAR == null || width <= 0 || height <= 0) {
+        if (deepAR == null || !deepARInitialized || width <= 0 || height <= 0) {
             return;
         }
 
@@ -188,7 +189,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         final long expectedSessionId = captureSessionId;
         Log.d(ASHISH, "scheduleOffscreenRenderingReset queued reason=" + reason + " session=" + expectedSessionId + " generation=" + resetGeneration + " delayMs=50");
         handler.postDelayed(() -> {
-            if (!capturing || deepAR == null || captureSessionId != expectedSessionId || resetGeneration != effectResetGeneration) {
+            if (!capturing || deepAR == null || !deepARInitialized || captureSessionId != expectedSessionId || resetGeneration != effectResetGeneration) {
                 Log.d(ASHISH, "Skipping delayed offscreen reset reason=" + reason + " session=" + expectedSessionId + " generation=" + resetGeneration);
                 return;
             }
@@ -292,6 +293,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         final long sessionId = captureSessionId + 1;
         captureSessionId = sessionId;
         this.capturing = true;
+        this.deepARInitialized = false;
         this.lastCameraInputWidth = 0;
         this.lastCameraInputHeight = 0;
         this.lastCameraInputRotation = 0;
@@ -334,13 +336,16 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             Log.d(ASHISH, "DeepAR initialized");
             Log.d(TAG, "ASHISH: About to set offscreen rendering");
             Log.d(ASHISH, "About to set offscreen rendering");
-            applyOffscreenRenderingOnFrameThread(targetWidth, targetHeight, "initialization");
+            deepAR.setOffscreenRendering(targetWidth, targetHeight);
+            appliedRenderWidth = targetWidth;
+            appliedRenderHeight = targetHeight;
             Log.d(TAG, "ASHISH: Offscreen rendering set");
             Log.d(ASHISH, "Offscreen rendering set");
         });
         if (!deepARInitOk) {
             Log.e(ASHISH, "DeepAR initialization failed on frame thread");
             capturing = false;
+            deepARInitialized = false;
             if (cameraExecutor != null) {
                 cameraExecutor.shutdownNow();
                 cameraExecutor = null;
@@ -349,6 +354,8 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
                 frameThread.quitSafely();
                 frameThread = null;
                 frameHandler = null;
+                deepARExecutor = null;
+                deepARThreadId = 0L;
             }
             if (capturerObserver != null) {
                 capturerObserver.onCapturerStarted(false);
@@ -377,12 +384,13 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
         captureSessionId++;
         capturing = false;
+        deepARInitialized = false;
         effectResetGeneration++;
+        unbindCamera();
+        releaseDeepAR();
         if (frameHandler != null) {
             frameHandler.removeCallbacksAndMessages(null);
         }
-        unbindCamera();
-        releaseDeepAR();
 
         if (cameraExecutor != null) {
             cameraExecutor.shutdownNow();
@@ -416,7 +424,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             "changeCaptureFormat target=" + width + "x" + height + " fps=" + framerate + " targetAspect=" + safeAspect(width, height));
         updateFrameRateThrottle(this.targetFps);
 
-        if (deepAR != null) {
+        if (deepAR != null && deepARInitialized) {
             runOnFrameThreadBlocking("set offscreen rendering", () -> {
                 Log.d(ASHISH, "Setting offscreen rendering in changeCaptureFormat");
                 applyOffscreenRenderingOnFrameThread(targetWidth, targetHeight, "changeCaptureFormat");
@@ -905,10 +913,10 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
             return;
         }
 
-        if (!capturing || deepAR == null || inputBuffers == null) {
+        if (!capturing || deepAR == null || !deepARInitialized || inputBuffers == null) {
             droppedFramesInactive++;
             if (droppedFramesInactive % 120 == 1) {
-                Log.d(ASHISH, "onCameraImage dropped(inactive) count=" + droppedFramesInactive + " capturing=" + capturing + " deepARNull=" + (deepAR == null) + " buffersNull=" + (inputBuffers == null));
+                Log.d(ASHISH, "onCameraImage dropped(inactive) count=" + droppedFramesInactive + " capturing=" + capturing + " deepARNull=" + (deepAR == null) + " deepARInitialized=" + deepARInitialized + " buffersNull=" + (inputBuffers == null));
             }
             imageProxy.close();
             return;
@@ -986,8 +994,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
         Runnable doReceiveFrame = () -> {
             try {
-                if (!capturing || deepAR == null) {
-                    imageProxy.close();
+                if (!capturing || deepAR == null || !deepARInitialized || captureSessionId != sessionId) {
                     return;
                 }
                 deepAR.receiveFrame(
@@ -1027,7 +1034,9 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
         long currentThreadId = Thread.currentThread().getId();
         if (deepARThreadId != 0L && currentThreadId != deepARThreadId && frameHandler != null) {
             Log.w(ASHISH, "onCameraImage rerouting frame to DeepAR thread: current=" + currentThreadId + " expected=" + deepARThreadId + " name=" + Thread.currentThread().getName());
-            frameHandler.post(doReceiveFrame);
+            if (!frameHandler.post(doReceiveFrame)) {
+                imageProxy.close();
+            }
         } else {
             doReceiveFrame.run();
         }
@@ -1062,6 +1071,7 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
 
     private synchronized void releaseDeepAR() {
         Log.d(ASHISH, "releaseDeepAR called");
+        deepARInitialized = false;
         if (deepAR == null) {
             return;
         }
@@ -1241,13 +1251,19 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     public void initialized() {
         Log.d(ASHISH, "DeepAR initialized callback received");
         Log.d(TAG, "DeepAR initialized callback received.");
+        if (!capturing || deepAR == null) {
+            Log.d(ASHISH, "Ignoring DeepAR initialized callback for inactive capturer");
+            return;
+        }
+        deepARInitialized = true;
         Log.d(
             ZOOM_DEBUG_TAG,
             "deepar-initialized-state"
                 + " target=" + targetWidth + "x" + targetHeight
                 + " appliedRender=" + appliedRenderWidth + "x" + appliedRenderHeight
                 + " captureSessionId=" + captureSessionId
-                + " capturing=" + capturing);
+                + " capturing=" + capturing
+                + " deepARInitialized=" + deepARInitialized);
         String effectPath = captureConfig.getEffectPath();
         if (effectPath != null && !effectPath.isEmpty()) {
             if (!assetPathExists(effectPath)) {
@@ -1269,8 +1285,8 @@ public class DeepARVideoCapturer implements VideoCapturer, AREventListener {
     }
 
     private void switchEffectInternal(String effectPath) {
-        if (deepAR == null) {
-            Log.e(ASHISH, "Cannot switch effect because DeepAR instance is null");
+        if (deepAR == null || !deepARInitialized) {
+            Log.e(ASHISH, "Cannot switch effect because DeepAR is not ready");
             return;
         }
         Log.d(
